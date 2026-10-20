@@ -1,0 +1,25 @@
+*{box-sizing:border-box}html,body{margin:0;height:100%;font:14px system-ui,sans-serif;color:#222;background:#eceff1}
+body{display:flex;flex-direction:column;overflow:hidden}
+#bar,#tools{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 8px;background:#263238;color:#fff}
+#tools{background:#37474f}
+.btn,.tool,select{border:1px solid #90a4ae;background:#fff;color:#222;border-radius:6px;padding:7px 11px;font-size:14px;cursor:pointer;min-height:36px}
+.btn.small{padding:4px 8px}.primary{background:#1976d2;color:#fff;border-color:#1976d2}.danger{background:#c62828;color:#fff}
+.tool.active{background:#ffb300;border-color:#ffb300;font-weight:600}
+.sep{width:1px;height:26px;background:#78909c}.scale{font-weight:600}
+.opt label{color:#fff}.hint{color:#cfd8dc;font-size:13px;flex:1;min-width:200px}
+#main{flex:1;display:flex;min-height:0}
+#viewport{flex:1;overflow:auto;position:relative;background:#78909c;touch-action:none}
+#stage{position:relative;margin:20px;display:inline-block;box-shadow:0 2px 10px #0006;background:#fff}
+#canvas{display:block}#svg{position:absolute;left:0;top:0;width:100%;height:100%;overflow:visible}
+#side{width:300px;overflow:auto;background:#fff;border-left:1px solid #b0bec5;padding:8px}
+#side h3{margin:8px 0 4px;font-size:15px}
+.row{display:flex;align-items:center;gap:6px;padding:5px;border-bottom:1px solid #eee;cursor:pointer;font-size:13px}
+.row.sel{background:#fff3cd}.sw{width:14px;height:14px;border-radius:3px;flex:none}
+.row .v{margin-left:auto;font-weight:600;white-space:nowrap}
+#edit label{display:block;margin:6px 0}#edit input[type=text],#edit textarea{width:100%}
+table.tot{width:100%;border-collapse:collapse;font-size:13px}table.tot td{padding:3px;border-bottom:1px solid #eee}
+dialog{border:none;border-radius:10px;box-shadow:0 4px 30px #0008;max-width:420px}
+dialog input[type=text]{width:100%;font-size:18px;padding:6px}menu{display:flex;gap:8px;justify-content:flex-end;padding:0}
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#263238;color:#fff;padding:8px 14px;border-radius:6px;display:none}
+.proj{display:flex;gap:6px;align-items:center;margin:4px 0}.proj span{flex:1}
+@media (max-width:800px){#side{width:220px}.hint{display:none}}

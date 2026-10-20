@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Plan Measure - PDF plan viewer and takeoff</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css"></head>
+<body>
+<header id="bar">
+  <label class="btn primary">Open plan<input id="file" type="file" accept="application/pdf,image/*" hidden></label>
+  <button id="saveBtn" class="btn">Save</button>
+  <button id="projBtn" class="btn">Projects</button>
+  <span class="sep"></span>
+  <button id="prev" class="btn">Prev</button><span id="pageInfo">-</span><button id="next" class="btn">Next</button>
+  <span class="sep"></span>
+  <button id="zoomOut" class="btn">-</button><span id="zoomInfo">100%</span><button id="zoomIn" class="btn">+</button><button id="fit" class="btn">Fit</button>
+  <span class="sep"></span>
+  <span id="scaleInfo" class="scale">Scale: not set</span>
+  <button id="scaleBtn" class="btn">Set scale</button>
+  <select id="units" title="Units"><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select>
+  <span class="sep"></span>
+  <button id="csvBtn" class="btn">Export CSV</button>
+  <button id="pdfBtn" class="btn">Export PDF</button>
+</header>
+<nav id="tools">
+  <button data-tool="select" class="tool active" title="Select / edit (V)">Select</button>
+  <button data-tool="pan" class="tool" title="Pan (H)">Pan</button>
+  <button data-tool="calibrate" class="tool" title="Calibrate scale with 2 points (K)">Calibrate</button>
+  <button data-tool="line" class="tool" title="Length (L)">Length</button>
+  <button data-tool="poly" class="tool" title="Pipe run / polyline (P)">Pipe run</button>
+  <button data-tool="area" class="tool" title="Area (A)">Area</button>
+  <button data-tool="count" class="tool" title="Count fixtures (C)">Count</button>
+  <button data-tool="text" class="tool" title="Text note (T)">Note</button>
+  <div class="opt"><label>Colour <input id="color" type="color" value="#e53935"></label></div>
+  <div class="opt"><label>Label <input id="label" type="text" placeholder="e.g. WC, 3/4 PEX" size="10"></label></div>
+  <button id="finishBtn" class="btn small" title="Finish run / area (Enter)">Finish</button>
+  <button id="undoPt" class="btn small" title="Remove last point (Backspace)">Undo point</button>
+  <div class="hint" id="hint">Open a PDF or image plan to start.</div>
+</nav>
+<main id="main">
+  <div id="viewport"><div id="stage"><canvas id="canvas"></canvas><svg id="svg"></svg></div></div>
+  <aside id="side">
+    <h3>Takeoff</h3>
+    <div id="totals"></div>
+    <h3>Items <small>(this page: <span id="pgOnly"><input type="checkbox" id="pageOnly" checked></span>)</small></h3>
+    <div id="list"></div>
+    <div id="edit" hidden>
+      <h3>Edit selected</h3>
+      <label>Label <input id="eLabel" type="text"></label>
+      <label>Colour <input id="eColor" type="color"></label>
+      <label id="eTextRow">Text <textarea id="eText" rows="2"></textarea></label>
+      <label id="eDropRow">Add to length (drops/fittings) <input id="eExtra" type="text" placeholder="e.g. 6' or 2m"></label>
+      <button id="eDel" class="btn danger">Delete</button>
+    </div>
+  </aside>
+</main>
+<dialog id="scaleDlg"><form method="dialog">
+  <h3>Set scale for this page</h3>
+  <p>Choose a standard scale, or use the Calibrate tool to click two points of a known distance.</p>
+  <select id="stdScale"></select>
+  <p id="imgDpiRow" hidden>Image resolution (DPI) <input id="imgDpi" type="number" value="150" style="width:6em"></p>
+  <label><input type="checkbox" id="allPages"> Apply to all pages</label>
+  <menu><button value="cancel" class="btn">Cancel</button><button id="stdOk" value="ok" class="btn primary">Apply</button></menu>
+</form></dialog>
+<dialog id="calDlg"><form method="dialog">
+  <h3>Known distance</h3>
+  <p>Enter the real length between the two points. Examples: 12'6", 12' 6 1/2", 20ft, 3.5m, 3500mm</p>
+  <input id="calVal" type="text" autocomplete="off">
+  <label><input type="checkbox" id="calAll"> Apply to all pages</label>
+  <menu><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary">Apply</button></menu>
+</form></dialog>
+<dialog id="projDlg"><form method="dialog">
+  <h3>Saved projects (stored in this browser)</h3>
+  <div id="projList"></div>
+  <menu><button value="cancel" class="btn">Close</button></menu>
+</form></dialog>
+<div id="toast"></div>
+<script src="lib/pdf.min.js"></script>
+<script src="lib/pdf-lib.min.js"></script>
+<script src="units.js"></script>
+<script src="app.js"></script>
+</body></html>
