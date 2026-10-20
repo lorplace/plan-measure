@@ -146,3 +146,7 @@ body:not(.caladj) #calSetBtn{display:none}
 #moreMenu .btn:disabled{opacity:.35}
 @media (min-width:701px){#redoMenu{display:none}}
 @media (max-width:700px){#redoBtn{display:none}#undoBtn{padding:6px}}
+body.aimtool .opt.lp{display:flex}
+#snapBtn.on{background:#00a152;border-color:#00a152;color:#fff}
+body:not(.placing) #loupeBtn,body:not(.placing) #loupeMag{display:none}
+@media (max-width:700px){body.cal.adj.placing #drawSlot .opt.lp,body.adj.placing #drawSlot .opt.lp{display:none}}

@@ -200,7 +200,7 @@ function clickAt(p, e) {
   const color = $('#color').value, lab = $('#label').value.trim();
   if (['line', 'poly', 'area', 'calibrate'].includes(tool)) {
     if (!draft) draft = { type: tool, pts: [], color: tool === 'calibrate' ? '#1976d2' : color, label: lab };
-    const prev = draft.pts[draft.pts.length - 1]; if (e.shiftKey || shiftDown) p = snapOrtho(prev, p);
+    const prev = draft.pts[draft.pts.length - 1]; p = aim(p, e, prev);
     if (prev && dist(prev, p) < 1e-6) return;
     if (tool === 'calibrate' && draft.pts.length >= 2) return;
     draft.pts.push(p); calSel = draft.pts.length - 1;
@@ -208,7 +208,7 @@ function clickAt(p, e) {
       if (tool === 'line') finishDraft(); else { calSel = 1; toast('Adjust points if needed (drag, arrows), then Set distance.', 4000); }
     }
     draw();
-  } else if (tool === 'count') { proj.items.push({ id: uid(), type: 'count', page, pts: [p], color, label: lab }); changed(); }
+  } else if (tool === 'count') { p = aim(p, e, null); proj.items.push({ id: uid(), type: 'count', page, pts: [p], color, label: lab }); changed(); }
   else if (tool === 'text') { const t = prompt('Note text:'); if (t) { proj.items.push({ id: uid(), type: 'text', page, pts: [p], color, label: '', text: t }); changed(); } }
 }
 
@@ -238,11 +238,12 @@ vpEl.addEventListener('pointermove', e => {
     const mv = Math.hypot(e.clientX - gesture.sx, e.clientY - gesture.sy) > 5; if (mv) gesture.moved = true;
     if (gesture.kind === 'pan' || (gesture.kind === 'maybe' && gesture.moved && e.pointerType === 'touch')) { gesture.kind = 'pan'; vpEl.scrollLeft = gesture.sl - (e.clientX - gesture.sx); vpEl.scrollTop = gesture.st - (e.clientY - gesture.sy); return; }
     if (gesture.kind === 'place') { hover = placeSnap(p, e); draw(); showLoupe(hover, e); return; }
-    if (gesture.kind === 'dpt') { draft.pts[gesture.v] = [p[0] + gesture.off[0], p[1] + gesture.off[1]]; draw(); showLoupe(draft.pts[gesture.v], e); return; }
-    if (gesture.kind === 'vertex') { const it = selItem(); let q = p; const prev = it.pts[gesture.v - 1] || it.pts[gesture.v + 1]; if (e.shiftKey) q = snapOrtho(prev, q); it.pts[gesture.v] = q; draw(); return; }
+    if (gesture.kind === 'dpt') { const o = draft.pts[gesture.v]; draft.pts[gesture.v] = aim([p[0] + gesture.off[0], p[1] + gesture.off[1]], e, null, o); draw(); showLoupe(draft.pts[gesture.v], e); return; }
+    if (gesture.kind === 'vertex') { const it = selItem(); let q = p; const prev = it.pts[gesture.v - 1] || it.pts[gesture.v + 1]; q = aim(q, e, prev, it.pts[gesture.v]); it.pts[gesture.v] = q; draw(); return; }
     if (gesture.kind === 'move' && gesture.moved) { const it = selItem(); const dx = p[0] - gesture.p[0], dy = p[1] - gesture.p[1]; it.pts = gesture.orig.map(q => [q[0] + dx, q[1] + dy]); draw(); return; }
   }
-  if (draft) { const prev = draft.pts[draft.pts.length - 1]; hover = (e.shiftKey || shiftDown) ? snapOrtho(prev, p) : p; draw(); }
+  if (draft) { const prev = draft.pts[draft.pts.length - 1]; hover = aim(p, e, prev); draw(); }
+  else if (tool === 'count' && !gesture) { aim(p, e, null); }
   if (PLACE.includes(tool) && !(draft && draft.type === 'calibrate' && draft.pts.length === 2)) showLoupe(placeSnap(p, e), e); else if (!gesture) hideLoupe();
 });
 function endPointer(e) {
@@ -373,7 +374,7 @@ const ICONS = {
  fit:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>', ruler:'<path d="M3 16L16 3l5 5L8 21z"/><path d="M7 12l2 2M10 9l2 2M13 6l2 2"/>',
  table:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M3 15h18M9 4v16"/>', download:'<path d="M12 3v12M7 10l5 5 5-5M4 20h16"/>',
  panel:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M15 4v16"/>', close:'<path d="M6 6l12 12M18 6L6 18"/>',
- undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-4"/>', redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h4"/>', select:'<path d="M5 3l14 8-6 2-2 6z"/>', loupe:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>', up:'<path d="M5 15l7-7 7 7"/>', down:'<path d="M5 9l7 7 7-7"/>', more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
+ undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-4"/>', redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h4"/>', snap:'<rect x="8" y="8" width="8" height="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>', select:'<path d="M5 3l14 8-6 2-2 6z"/>', loupe:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>', up:'<path d="M5 15l7-7 7 7"/>', down:'<path d="M5 9l7 7 7-7"/>', more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
  cal:'<path d="M4 20L20 4"/><circle cx="4" cy="20" r="2"/><circle cx="20" cy="4" r="2"/><path d="M9 9l-2-2M15 15l2 2"/>', line:'<path d="M4 18L20 6"/><path d="M4 14v8M20 2v8"/>',
  poly:'<path d="M3 19h6V9h6v6h6"/><circle cx="3" cy="19" r="1.5"/><circle cx="21" cy="15" r="1.5"/>', area:'<path d="M4 6l12-2 4 10-8 6-8-4z" fill="currentColor" fill-opacity=".25"/>',
  count:'<circle cx="7" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="12" cy="17" r="3"/>', text:'<path d="M5 5h14M12 5v14M9 19h6"/>'
@@ -425,7 +426,7 @@ document.querySelectorAll('#loupeBtn,.nud').forEach(b => { if (b.querySelector('
 const PLACE = ['calibrate', 'line', 'poly', 'area'];
 let calSel = 0, loupeOn = localStorage.getItem('pm-loupe') !== '0', loupeTask = null, loupeBusy = false, loupeWant = null;
 const LSZ = 140, lc = $('#loupe');
-function placeSnap(p, e) { if (!draft || !draft.pts.length || !(e.shiftKey || shiftDown)) return p; return snapOrtho(draft.pts[draft.pts.length - 1], p); }
+function placeSnap(p, e) { return aim(p, e, draft && draft.pts.length ? draft.pts[draft.pts.length - 1] : null); }
 function toggleLoupe() { loupeOn = !loupeOn; localStorage.setItem('pm-loupe', loupeOn ? '1' : '0'); $('#loupeBtn').classList.toggle('on', loupeOn); if (!loupeOn) hideLoupe(); toast('Magnifier ' + (loupeOn ? 'on' : 'off')); }
 $('#loupeBtn').classList.toggle('on', loupeOn); $('#loupeBtn').onclick = toggleLoupe;
 function hideLoupe() { lc.style.display = 'none'; loupeWant = null; }
@@ -463,6 +464,7 @@ function loupeOverlay(ctx, p, S, L) {
   const T = q => [(q[0] - p[0]) * S + L / 2, (q[1] - p[1]) * S + L / 2], dpr = window.devicePixelRatio || 1;
   if (draft && draft.pts.length) { ctx.strokeStyle = draft.color; ctx.lineWidth = 1.5 * dpr; ctx.beginPath(); draft.pts.forEach((q, i) => { const [x, y] = T(q); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); if (!(draft.type === 'calibrate' && draft.pts.length === 2) && hover) { const [x, y] = T(hover); ctx.lineTo(x, y); } ctx.stroke();
     draft.pts.forEach((q, i) => { const [x, y] = T(q); ctx.beginPath(); ctx.arc(x, y, (i === calSel ? 5 : 3) * dpr, 0, 7); ctx.strokeStyle = i === calSel ? '#ffb300' : draft.color; ctx.stroke(); }); }
+  if (snapHit) { const [sx, sy] = T(snapHit.p); drawSnapMark(ctx, sx, sy, snapHit.kind, 7 * dpr, 2 * dpr); }
   ctx.strokeStyle = '#e53935'; ctx.lineWidth = 1 * dpr; const c = L / 2, g = 6 * dpr; ctx.beginPath();
   ctx.moveTo(0, c); ctx.lineTo(c - g, c); ctx.moveTo(c + g, c); ctx.lineTo(L, c); ctx.moveTo(c, 0); ctx.lineTo(c, c - g); ctx.moveTo(c, c + g); ctx.lineTo(c, L); ctx.stroke();
   ctx.fillStyle = '#e53935'; ctx.fillRect(c - dpr / 2, c - dpr / 2, dpr, dpr);
@@ -477,8 +479,8 @@ $('#loupeMag').addEventListener('change', () => { if (loupeWant) { const r = svg
 vpEl.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !gesture) hideLoupe(); });
 const _udb = updateDrawBar; updateDrawBar = function () { _udb(); const adj = !!draft && draft.pts.length > 0 && PLACE.includes(tool);
   document.body.classList.toggle('adj', adj); document.body.classList.toggle('caladj', !!draft && draft.type === 'calibrate' && draft.pts.length === 2);
-  document.body.classList.toggle('placing', PLACE.includes(tool)); $('#ptSel').textContent = 'Point ' + (Math.min(calSel, draft ? draft.pts.length - 1 : 0) + 1); };
-const _setTool = setTool; setTool = function (t) { hideLoupe(); _setTool(t); };
+  document.body.classList.toggle('placing', PLACE.includes(tool)); document.body.classList.toggle('aimtool', PLACE.includes(tool) || tool === 'count'); $('#ptSel').textContent = 'Point ' + (Math.min(calSel, draft ? draft.pts.length - 1 : 0) + 1); };
+const _setTool = setTool; setTool = function (t) { hideLoupe(); snapHit = null; _setTool(t); };
 document.querySelectorAll('.tool').forEach(b => b.onclick = () => setTool(b.dataset.tool));
 
 // ---- undo / redo history (snapshots of items + scales, max 100) ----
@@ -499,3 +501,96 @@ function updHistBtns() { const pending = !!H.t; const canU = !!(draft && draft.p
 $('#undoBtn').onclick = undo; $('#redoBtn').onclick = redo;
 const _draw2 = draw; draw = function () { _draw2(); updHistBtns(); };
 if (proj) resetHist();
+
+// ---- snapping ("auto aim") ----
+let snapOn = localStorage.getItem('pm-snap') !== '0', snapHit = null;
+const geomCache = {};   // page -> {segs: Float64Array-like arrays, grid: Map, cell, pts: [] } or image pixel data
+$('#snapBtn').classList.toggle('on', snapOn);
+function toggleSnap() { snapOn = !snapOn; localStorage.setItem('pm-snap', snapOn ? '1' : '0'); $('#snapBtn').classList.toggle('on', snapOn); snapHit = null; showSnapMark(); toast('Snap ' + (snapOn ? 'on' : 'off')); }
+$('#snapBtn').onclick = toggleSnap;
+document.addEventListener('keydown', e => { if (e.target.matches('input,textarea,select')) return; if (e.key.toLowerCase() === 's' && !e.ctrlKey && !e.metaKey && !e.altKey) toggleSnap(); });
+const CELL = 24;
+function gridAdd(grid, i, x1, y1, x2, y2) {
+  const cx1 = Math.floor(Math.min(x1, x2) / CELL), cx2 = Math.floor(Math.max(x1, x2) / CELL), cy1 = Math.floor(Math.min(y1, y2) / CELL), cy2 = Math.floor(Math.max(y1, y2) / CELL);
+  const len = Math.hypot(x2 - x1, y2 - y1), steps = Math.max(1, Math.ceil(len / (CELL / 2)));
+  if ((cx2 - cx1 + 1) * (cy2 - cy1 + 1) <= 4) { for (let cx = cx1; cx <= cx2; cx++) for (let cy = cy1; cy <= cy2; cy++) { const k = cx + ',' + cy; let c = grid.get(k); if (!c) grid.set(k, c = []); c.push(i); } return; }
+  const seen = new Set(); for (let s = 0; s <= steps; s++) { const t = s / steps, x = x1 + (x2 - x1) * t, y = y1 + (y2 - y1) * t;
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) { const k = (Math.floor(x / CELL) + dx) + ',' + (Math.floor(y / CELL) + dy); if (seen.has(k)) continue; seen.add(k); let c = grid.get(k); if (!c) grid.set(k, c = []); c.push(i); } }
+}
+async function buildGeom(pg) {
+  if (geomCache[pg]) return geomCache[pg];
+  const G = geomCache[pg] = { segs: [], grid: new Map(), ready: false };
+  if (!doc) return G;
+  if (doc.type === 'image') { const c = document.createElement('canvas'); c.width = doc.sizes[1].w; c.height = doc.sizes[1].h; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(doc.img, 0, 0); G.pix = x.getImageData(0, 0, c.width, c.height); G.ready = true; return G; }
+  const page = await doc.pdf.getPage(pg), ops = await page.getOperatorList(), vp = doc.vps[pg], OPS = pdfjsLib.OPS, U = pdfjsLib.Util;
+  let ctm = [1, 0, 0, 1, 0, 0]; const stack = [];
+  const T = (x, y) => { const q = U.applyTransform([x, y], ctm); return U.applyTransform(q, vp.transform); };
+  const add = (a, b) => { if (G.segs.length < 200000 && (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) > 0.05)) G.segs.push([a[0], a[1], b[0], b[1]]); };
+  for (let i = 0; i < ops.fnArray.length; i++) { const fn = ops.fnArray[i], args = ops.argsArray[i];
+    if (fn === OPS.save) stack.push(ctm.slice()); else if (fn === OPS.restore) { if (stack.length) ctm = stack.pop(); }
+    else if (fn === OPS.transform) ctm = U.transform(ctm, args);
+    else if (fn === OPS.paintFormXObjectBegin) { stack.push(ctm.slice()); if (args[0]) ctm = U.transform(ctm, args[0]); }
+    else if (fn === OPS.paintFormXObjectEnd) { if (stack.length) ctm = stack.pop(); }
+    else if (fn === OPS.constructPath) { const sub = args[0], co = args[1]; let j = 0, cur = null, start = null;
+      for (const op of sub) {
+        if (op === OPS.moveTo) { cur = start = T(co[j], co[j + 1]); j += 2; }
+        else if (op === OPS.lineTo) { const n = T(co[j], co[j + 1]); j += 2; if (cur) add(cur, n); cur = n; }
+        else if (op === OPS.curveTo) { const n = T(co[j + 4], co[j + 5]); j += 6; if (cur) add(cur, n); cur = n; }
+        else if (op === OPS.curveTo2 || op === OPS.curveTo3) { const n = T(co[j + 2], co[j + 3]); j += 4; if (cur) add(cur, n); cur = n; }
+        else if (op === OPS.rectangle) { const [x, y, w, h] = co.slice(j, j + 4); j += 4; const p1 = T(x, y), p2 = T(x + w, y), p3 = T(x + w, y + h), p4 = T(x, y + h); add(p1, p2); add(p2, p3); add(p3, p4); add(p4, p1); cur = start = p1; }
+        else if (op === OPS.closePath) { if (cur && start) add(cur, start); cur = start; }
+      } } }
+  G.segs.forEach((s, i) => gridAdd(G.grid, i, s[0], s[1], s[2], s[3])); G.ready = true; return G;
+}
+function nearSegs(G, p, r) { const out = new Set(); const c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
+  for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) { const c = G.grid.get(cx + ',' + cy); if (c) c.forEach(i => out.add(i)); } return [...out]; }
+function projSeg(p, s) { const dx = s[2] - s[0], dy = s[3] - s[1], L2 = dx * dx + dy * dy; let t = L2 ? ((p[0] - s[0]) * dx + (p[1] - s[1]) * dy) / L2 : 0; t = Math.max(0, Math.min(1, t)); return [s[0] + t * dx, s[1] + t * dy]; }
+function segX(a, b) { const d = (a[2] - a[0]) * (b[3] - b[1]) - (a[3] - a[1]) * (b[2] - b[0]); if (Math.abs(d) < 1e-9) return null;
+  const t = ((b[0] - a[0]) * (b[3] - b[1]) - (b[1] - a[1]) * (b[2] - b[0])) / d, u = ((b[0] - a[0]) * (a[3] - a[1]) - (b[1] - a[1]) * (a[2] - a[0])) / d;
+  if (t < -1e-6 || t > 1 + 1e-6 || u < -1e-6 || u > 1 + 1e-6) return null; return [a[0] + t * (a[2] - a[0]), a[1] + t * (a[3] - a[1])]; }
+function findSnap(p, r, exclude) {
+  const G = geomCache[page]; let best = null; const consider = (q, kind, pri) => { const d = dist(p, q); if (d <= r && (!best || pri < best.pri || (pri === best.pri && d < best.d))) best = { p: q, kind, pri, d }; };
+  // markup points (existing items and current draft)
+  for (const it of proj.items) if (it.page === page) for (const q of it.pts) if (q !== exclude) consider(q, 'end', 0);
+  if (draft) for (const q of draft.pts) if (q !== exclude) consider(q, 'end', 0);
+  if (G && G.ready && G.segs.length) { const ids = nearSegs(G, p, r).slice(0, 400), S = ids.map(i => G.segs[i]);
+    for (const s of S) { consider([s[0], s[1]], 'end', 0); consider([s[2], s[3]], 'end', 0); }
+    { const near = S.filter(s => dist(projSeg(p, s), p) <= r).slice(0, 80);
+      for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) { const x = segX(near[i], near[j]); if (x) consider(x, 'x', 0); }
+      if (!best) for (const s of near) consider(projSeg(p, s), 'line', 2); } }
+  if (!best && G && G.pix) { // image: nearest dark pixel, refined to centre of the dark stroke
+    const { width: W, height: Hh, data } = G.pix, R = Math.ceil(r), x0 = Math.round(p[0]), y0 = Math.round(p[1]); let bd = 1e9, bq = null;
+    const dark = (x, y) => x >= 0 && y >= 0 && x < W && y < Hh && (data[(y * W + x) * 4] * .3 + data[(y * W + x) * 4 + 1] * .59 + data[(y * W + x) * 4 + 2] * .11) < 110;
+    for (let y = y0 - R; y <= y0 + R; y++) for (let x = x0 - R; x <= x0 + R; x++) if (dark(x, y)) { const d = (x - p[0]) ** 2 + (y - p[1]) ** 2; if (d < bd) { bd = d; bq = [x, y]; } }
+    if (bq && Math.sqrt(bd) <= r) { // centre across stroke: average dark run horizontally and vertically, take the shorter run's centre
+      const run = (dx, dy) => { let a = 0, b = 0; while (a < 12 && dark(bq[0] - dx * (a + 1), bq[1] - dy * (a + 1))) a++; while (b < 12 && dark(bq[0] + dx * (b + 1), bq[1] + dy * (b + 1))) b++; return [a, b]; };
+      const [ha, hb] = run(1, 0), [va, vb] = run(0, 1); let q;
+      if (ha + hb <= va + vb) q = [bq[0] + (hb - ha) / 2 + 0.5, p[1]]; else q = [p[0], bq[1] + (vb - va) / 2 + 0.5];
+      best = { p: q, kind: 'line', pri: 2, d: 0 }; } }
+  return best;
+}
+function aim(p, e, prev, exclude) {
+  let q = p; const ortho = prev && (e.shiftKey || shiftDown);
+  if (ortho) q = snapOrtho(prev, q);
+  snapHit = null;
+  if (snapOn && !e.altKey && doc && proj) {
+    if (!geomCache[page]) buildGeom(page);
+    const r = (e.pointerType && e.pointerType !== 'mouse' ? 22 : 12) / zoom, h = findSnap(q, r, exclude);
+    if (h) { snapHit = { p: h.p.slice(), kind: h.kind }; q = h.p.slice(); if (ortho) { const hz = Math.abs(p[0] - prev[0]) >= Math.abs(p[1] - prev[1]); q = hz ? [h.p[0], prev[1]] : [prev[0], h.p[1]]; snapHit.p = q; } }
+  }
+  showSnapMark(); return q;
+}
+function drawSnapMark(ctx, x, y, kind, s, lw) { ctx.save(); ctx.strokeStyle = '#00c853'; ctx.lineWidth = lw; ctx.beginPath();
+  if (kind === 'end') ctx.rect(x - s, y - s, 2 * s, 2 * s); else if (kind === 'x') { ctx.moveTo(x - s, y - s); ctx.lineTo(x + s, y + s); ctx.moveTo(x + s, y - s); ctx.lineTo(x - s, y + s); }
+  else { ctx.moveTo(x - s, y); ctx.lineTo(x, y - s); ctx.lineTo(x + s, y); ctx.lineTo(x, y + s); ctx.closePath(); } ctx.stroke(); ctx.restore(); }
+function showSnapMark() { let g = svg.querySelector('#snapG'); if (!g) { g = el('g', { id: 'snapG', 'pointer-events': 'none' }, svg); } g.innerHTML = '';
+  if (!snapHit) return; const [x, y] = snapHit.p, s = 7 / zoom, w = 2 / zoom, A = { fill: 'none', stroke: '#00c853', 'stroke-width': w };
+  if (snapHit.kind === 'end') el('rect', { ...A, x: x - s, y: y - s, width: 2 * s, height: 2 * s }, g);
+  else if (snapHit.kind === 'x') el('path', { ...A, d: `M${x - s} ${y - s}L${x + s} ${y + s}M${x + s} ${y - s}L${x - s} ${y + s}` }, g);
+  else el('path', { ...A, d: `M${x - s} ${y}L${x} ${y - s}L${x + s} ${y}L${x} ${y + s}Z` }, g);
+  g.dataset.kind = snapHit.kind; }
+const _draw3 = draw; draw = function () { _draw3(); if (snapHit && (PLACE.includes(tool) || tool === 'count' || gesture)) showSnapMark(); };
+const _loadDoc = loadDoc; loadDoc = async function (...a) { for (const k in geomCache) delete geomCache[k]; const r = await _loadDoc(...a); return r; };
+vpEl.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !gesture) { snapHit = null; showSnapMark(); } });
+window.PMsnap = { buildGeom: pg => buildGeom(pg), get hit() { return snapHit; }, geom: geomCache };
+const _rc = renderCanvas; renderCanvas = async function () { await _rc(); if (doc && !geomCache[page]) buildGeom(page); };

@@ -14,7 +14,7 @@ with sync_playwright() as p:
         r=pg.evaluate("(()=>{const r=document.querySelector('#svg').getBoundingClientRect();return [r.left,r.top]})()"); z=pg.evaluate('PM.zoom'); return r[0]+x*z, r[1]+(H-y)*z
     pg.click('[data-tool=calibrate]'); x,y=scr(144,300); pg.mouse.move(x,y); pg.wait_for_timeout(300)
     chk('desktop loupe visible on hover', pg.is_visible('#loupe')); pg.mouse.click(x,y)
-    x2,y2=scr(144+50*MM,300); pg.mouse.click(x2+3,y2)   # deliberately 3 screen px off
+    x2,y2=scr(144+50*MM,300); pg.keyboard.down('Alt'); pg.mouse.click(x2+3,y2); pg.keyboard.up('Alt')   # 3 px off with snap held off
     for _ in range(3): pg.keyboard.press('ArrowLeft')
     pg.wait_for_function("document.querySelector('#loupe').dataset.sharp==='1'",timeout=5000)
     pg.screenshot(path='shots/desktop-loupe-calibrate.png')
