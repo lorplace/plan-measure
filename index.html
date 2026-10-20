@@ -9,6 +9,7 @@
   <label class="btn primary" data-icon="open">Open plan<input id="file" type="file" accept="application/pdf,image/*" hidden></label>
   <button id="saveBtn" class="btn" title="Save project" data-icon="save">Save</button>
   <button id="projBtn" class="btn" title="Saved projects" data-icon="folder">Projects</button>
+  <button id="undoBtn" class="btn icon" data-icon="undo" title="Undo (Ctrl+Z)" disabled></button><button id="redoBtn" class="btn icon" data-icon="redo" title="Redo (Ctrl+Shift+Z / Ctrl+Y)" disabled></button>
   <span class="sep"></span>
   <button id="prev" class="btn icon" data-icon="left" title="Previous page"></button><span id="pageInfo">-</span><button id="next" class="btn icon" data-icon="right" title="Next page"></button>
   <span class="sep"></span>
@@ -42,6 +43,7 @@
 </nav>
 <div id="drawBar"><div id="drawSlot"></div><button id="cancelBtn" class="btn small" data-icon="close">Cancel</button></div>
 <div id="moreMenu" hidden>
+  <button class="btn" data-icon="redo" data-proxy="#redoBtn" id="redoMenu">Redo</button>
   <button class="btn" data-icon="ruler" data-proxy="#scaleBtn">Set scale</button>
   <button class="btn" data-icon="fit" data-proxy="#fit">Fit page</button>
   <button class="btn" data-icon="save" data-proxy="#saveBtn">Save</button>

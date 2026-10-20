@@ -39,7 +39,7 @@ async function onFile(e) { const f = e.target.files[0]; if (!f) return; e.target
   const bytes = new Uint8Array(await f.arrayBuffer());
   await loadDoc(bytes, f.type || (f.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/png'), f.name);
   proj = { id: uid(), name: f.name.replace(/\.[^.]+$/, ''), fileName: f.name, fileType: doc.mime, units: $('#units').value, scales: {}, items: [] };
-  page = 1; fitPage(); await persist(); toast('Opened ' + f.name + '. Set the scale before measuring.');
+  page = 1; resetHist(); fitPage(); await persist(); toast('Opened ' + f.name + '. Set the scale before measuring.');
 }
 $('#file').addEventListener('change', onFile);
 
@@ -153,7 +153,7 @@ $('#eText').addEventListener('input', e => { const it = selItem(); if (it) { it.
 $('#eExtra').addEventListener('change', e => { const it = selItem(); if (!it) return; const v = e.target.value.trim() ? Units.parseLength(e.target.value, proj.units) : 0; if (isNaN(v)) return toast('Could not read that length'); it.extra = v; changed(); });
 $('#eDel').addEventListener('click', deleteSel);
 function deleteSel() { if (!selId) return; proj.items = proj.items.filter(i => i.id !== selId); selId = null; changed(); }
-function changed() { draw(); persistSoon(); }
+function changed() { draw(); persistSoon(); commitSoon(); }
 
 // ---------- navigation & zoom ----------
 function gotoPage(n) { if (!doc) return; n = Math.max(1, Math.min(doc.numPages, n)); if (n !== page) { page = n; draft = null; } fitPage(); }
@@ -265,6 +265,8 @@ document.addEventListener('keydown', e => {
   if (e.key.startsWith('Arrow') && draft && draft.pts.length) { e.preventDefault(); const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key]; nudge(d[0], d[1]); return; }
   if (e.key.toLowerCase() === 'm' && !e.ctrlKey && !e.metaKey) { toggleLoupe(); return; }
   if (e.key === 'Tab' && draft && draft.pts.length > 1) { e.preventDefault(); calSel = (calSel + 1) % draft.pts.length; draw(); return; }
+  if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.key.toLowerCase() === 'z' && e.shiftKey))) { e.preventDefault(); redo(); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
   if (e.key === 'Enter') { e.preventDefault(); finishDraft(); }
   else if (e.key === 'Escape') { draft = null; hover = null; selId = null; draw(); }
   else if (e.key === 'Delete' || (e.key === 'Backspace' && !draft)) deleteSel();
@@ -276,7 +278,7 @@ document.addEventListener('keyup', e => { if (e.key === 'Shift') shiftDown = fal
 // ---------- scale ----------
 Units.STD.forEach((s, i) => { const o = document.createElement('option'); o.value = i; o.textContent = s.name; $('#stdScale').appendChild(o); });
 $('#stdScale').value = Units.STD.findIndex(s => s.ratio === 48);
-function applyScale(mPerUnit, name, all) { const pgs = all ? Array.from({ length: doc.numPages }, (_, i) => i + 1) : [page]; proj.scaleNames = proj.scaleNames || {}; pgs.forEach(p => { proj.scales[p] = mPerUnit; proj.scaleNames[p] = name; }); layout(); persistSoon(); toast('Scale set: ' + name); }
+function applyScale(mPerUnit, name, all) { const pgs = all ? Array.from({ length: doc.numPages }, (_, i) => i + 1) : [page]; proj.scaleNames = proj.scaleNames || {}; pgs.forEach(p => { proj.scales[p] = mPerUnit; proj.scaleNames[p] = name; }); layout(); persistSoon(); commitHist(); toast('Scale set: ' + name); }
 $('#scaleBtn').onclick = () => { if (!doc) return toast('Open a plan first'); $('#imgDpiRow').hidden = doc.type !== 'image'; $('#scaleDlg').showModal(); };
 $('#scaleDlg').addEventListener('close', () => { if ($('#scaleDlg').returnValue !== 'ok') return; const s = Units.STD[$('#stdScale').value];
   let m = s.mPerPt; if (doc.type === 'image') m = s.ratio * Units.IN / (+$('#imgDpi').value || 150); applyScale(m, s.name, $('#allPages').checked); });
@@ -352,7 +354,7 @@ async function idb(mode, fn) { const d = await db(); return new Promise((res, re
 let saveTimer; function persistSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(persist, 800); }
 async function persist() { if (!proj || !doc) return; try { await idb('readwrite', s => s.put({ ...JSON.parse(JSON.stringify(proj)), bytes: doc.bytes, updated: Date.now() })); localStorage.setItem('pm-last', proj.id); } catch (e) { toast('Could not save: ' + e.message); } }
 $('#saveBtn').onclick = async () => { if (!proj) return; const n = prompt('Project name:', proj.name); if (n) { proj.name = n; await persist(); toast('Saved in this browser'); } };
-async function openProject(id) { const r = await idb('readonly', s => s.get(id)); if (!r) return; const { bytes, updated, ...p } = r; await loadDoc(new Uint8Array(bytes), p.fileType, p.fileName); proj = p; $('#units').value = p.units; page = 1; selId = null; draft = null; fitPage(); localStorage.setItem('pm-last', id); }
+async function openProject(id) { const r = await idb('readonly', s => s.get(id)); if (!r) return; const { bytes, updated, ...p } = r; await loadDoc(new Uint8Array(bytes), p.fileType, p.fileName); proj = p; resetHist(); $('#units').value = p.units; page = 1; selId = null; draft = null; fitPage(); localStorage.setItem('pm-last', id); }
 $('#projBtn').onclick = async () => { const all = await idb('readonly', s => s.getAll()); all.sort((a, b) => b.updated - a.updated);
   $('#projList').innerHTML = all.map(p => `<div class="proj"><span>${esc(p.name)}<br><small>${new Date(p.updated).toLocaleString()} - ${p.items.length} items</small></span><button type="button" class="btn" data-open="${p.id}">Open</button><button type="button" class="btn danger" data-del="${p.id}">Delete</button></div>`).join('') || 'No saved projects.';
   $('#projDlg').showModal(); };
@@ -362,7 +364,7 @@ $('#projList').addEventListener('click', async e => { const o = e.target.dataset
 setTool('select'); $('#hint').textContent = 'Open a PDF or image plan to start. Your work is saved automatically in this browser.';
 (async () => { const last = localStorage.getItem('pm-last'); if (last) try { await openProject(last); } catch (e) { } })();
 // test hook
-window.PM = { get draft() { return draft; }, get proj() { return proj; }, get doc() { return doc; }, measure, buildCSV, buildPDF, setTool, gotoPage, applyScale, get zoom() { return zoom; } };
+window.PM = { undo: () => undo(), redo: () => redo(), get hist() { return { u: H.u.length, r: H.r.length }; }, get draft() { return draft; }, get proj() { return proj; }, get doc() { return doc; }, measure, buildCSV, buildPDF, setTool, gotoPage, applyScale, get zoom() { return zoom; } };
 $('#calVal').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#calDlg').close('ok'); } });
 // ---- icons (inline SVG, no external assets) ----
 const ICONS = {
@@ -371,7 +373,7 @@ const ICONS = {
  fit:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>', ruler:'<path d="M3 16L16 3l5 5L8 21z"/><path d="M7 12l2 2M10 9l2 2M13 6l2 2"/>',
  table:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M3 15h18M9 4v16"/>', download:'<path d="M12 3v12M7 10l5 5 5-5M4 20h16"/>',
  panel:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M15 4v16"/>', close:'<path d="M6 6l12 12M18 6L6 18"/>',
- select:'<path d="M5 3l14 8-6 2-2 6z"/>', loupe:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>', up:'<path d="M5 15l7-7 7 7"/>', down:'<path d="M5 9l7 7 7-7"/>', more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
+ undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-4"/>', redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h4"/>', select:'<path d="M5 3l14 8-6 2-2 6z"/>', loupe:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>', up:'<path d="M5 15l7-7 7 7"/>', down:'<path d="M5 9l7 7 7-7"/>', more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
  cal:'<path d="M4 20L20 4"/><circle cx="4" cy="20" r="2"/><circle cx="20" cy="4" r="2"/><path d="M9 9l-2-2M15 15l2 2"/>', line:'<path d="M4 18L20 6"/><path d="M4 14v8M20 2v8"/>',
  poly:'<path d="M3 19h6V9h6v6h6"/><circle cx="3" cy="19" r="1.5"/><circle cx="21" cy="15" r="1.5"/>', area:'<path d="M4 6l12-2 4 10-8 6-8-4z" fill="currentColor" fill-opacity=".25"/>',
  count:'<circle cx="7" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="12" cy="17" r="3"/>', text:'<path d="M5 5h14M12 5v14M9 19h6"/>'
@@ -478,3 +480,22 @@ const _udb = updateDrawBar; updateDrawBar = function () { _udb(); const adj = !!
   document.body.classList.toggle('placing', PLACE.includes(tool)); $('#ptSel').textContent = 'Point ' + (Math.min(calSel, draft ? draft.pts.length - 1 : 0) + 1); };
 const _setTool = setTool; setTool = function (t) { hideLoupe(); _setTool(t); };
 document.querySelectorAll('.tool').forEach(b => b.onclick = () => setTool(b.dataset.tool));
+
+// ---- undo / redo history (snapshots of items + scales, max 100) ----
+const H = { u: [], r: [], cur: null, t: null };
+const snap = () => JSON.stringify({ items: proj.items, scales: proj.scales, scaleNames: proj.scaleNames || {} });
+function resetHist() { H.u = []; H.r = []; H.cur = proj ? snap() : null; clearTimeout(H.t); H.t = null; updHistBtns(); }
+function commitHist() { clearTimeout(H.t); H.t = null; if (!proj) return; const s = snap(); if (H.cur !== null && s !== H.cur) { H.u.push(H.cur); if (H.u.length > 100) H.u.shift(); H.r = []; } H.cur = s; updHistBtns(); }
+function commitSoon() { clearTimeout(H.t); H.t = setTimeout(commitHist, 400); updHistBtns(); }
+function restore(s) { const o = JSON.parse(s); proj.items = o.items; proj.scales = o.scales; proj.scaleNames = o.scaleNames; H.cur = s;
+  if (selId && !proj.items.some(i => i.id === selId)) selId = null; layout(); persistSoon(); updHistBtns(); }
+function undo() {
+  if (draft && draft.pts.length) { draft.pts.pop(); if (!draft.pts.length) draft = null; draw(); updHistBtns(); return; }
+  commitHist(); if (!H.u.length) return; H.r.push(H.cur); restore(H.u.pop()); toast('Undone');
+}
+function redo() { commitHist(); if (!H.r.length) return; H.u.push(H.cur); restore(H.r.pop()); toast('Redone'); }
+function updHistBtns() { const pending = !!H.t; const canU = !!(draft && draft.pts.length) || H.u.length > 0 || !!pending, canR = H.r.length > 0 && !pending;
+  $('#undoBtn').disabled = !canU; $('#redoBtn').disabled = !canR; $('#redoMenu').disabled = !canR; }
+$('#undoBtn').onclick = undo; $('#redoBtn').onclick = redo;
+const _draw2 = draw; draw = function () { _draw2(); updHistBtns(); };
+if (proj) resetHist();

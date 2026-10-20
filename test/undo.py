@@ -1,0 +1,46 @@
+import sys, json
+from playwright.sync_api import sync_playwright
+URL=sys.argv[1]; H=792; IN=72; ok=True
+def chk(n,c):
+    global ok; ok&=bool(c); print(('PASS ' if c else 'FAIL ')+n)
+with sync_playwright() as p:
+    b=p.chromium.launch(executable_path='/usr/bin/google-chrome',args=['--no-sandbox'])
+    pg=b.new_page(viewport={'width':1600,'height':950}); errs=[]; pg.on('pageerror',lambda e:errs.append(str(e)))
+    pg.goto(URL); pg.set_input_files('#file','test/sample-plan.pdf'); pg.wait_for_function('window.PM.proj'); pg.wait_for_timeout(400)
+    def scr(x,y):
+        r=pg.evaluate("(()=>{const r=document.querySelector('#svg').getBoundingClientRect();return [r.left,r.top]})()"); z=pg.evaluate('PM.zoom'); return r[0]+x*z, r[1]+(H-y)*z
+    def n(): return pg.evaluate('PM.proj.items.length')
+    chk('undo disabled at start', pg.is_disabled('#undoBtn') and pg.is_disabled('#redoBtn'))
+    pg.click('#scaleBtn'); pg.select_option('#stdScale',label='1/4" = 1\'-0"'); pg.click('#stdOk')
+    pg.click('[data-tool=line]'); pg.mouse.click(*scr(144,200)); pg.mouse.click(*scr(504,200)); pg.wait_for_timeout(500)
+    pg.click('[data-tool=poly]'); pg.mouse.click(*scr(600,200)); pg.mouse.click(*scr(700,200)); pg.mouse.click(*scr(700,300))
+    pg.click('#undoBtn'); chk('undo while drawing removes last point', pg.evaluate('PM.draft.pts.length')==2); pg.click('#finishBtn'); pg.wait_for_timeout(500)
+    chk('2 items', n()==2)
+    # move (drag) line item with select tool
+    pg.click('[data-tool=select]'); a=scr(300,200); pg.mouse.move(*a); pg.mouse.down(); pg.mouse.move(a[0],a[1]+40,steps=5); pg.mouse.up(); pg.wait_for_timeout(500)
+    y_after=pg.evaluate('PM.proj.items[0].pts[0][1]')
+    pg.fill('#eLabel','Main'); pg.wait_for_timeout(600)
+    pg.evaluate('document.activeElement.blur()'); pg.keyboard.press('Delete'); pg.wait_for_timeout(500); chk('deleted', n()==1)
+    pg.keyboard.press('Control+z'); pg.wait_for_timeout(100); chk('ctrl+z restores delete', n()==2 and pg.evaluate('PM.proj.items[0].label')=='Main')
+    pg.click('#undoBtn'); chk('undo label edit', pg.evaluate('PM.proj.items[0].label')=='')
+    pg.click('#undoBtn'); chk('undo move', abs(pg.evaluate('PM.proj.items[0].pts[0][1]')-(H-200))<0.01 and y_after!=H-200)
+    pg.click('#undoBtn'); chk('undo add poly', n()==1)
+    pg.click('#undoBtn'); chk('undo add line', n()==0)
+    pg.click('#undoBtn'); chk('undo scale', not pg.evaluate('PM.proj.scales[1]'))
+    chk('undo disabled when empty', pg.is_disabled('#undoBtn'))
+    pg.keyboard.press('Control+Shift+Z'); chk('redo scale', bool(pg.evaluate('PM.proj.scales[1]')))
+    pg.keyboard.press('Control+y'); pg.click('#redoBtn'); chk('redo adds', n()==2)
+    pg.wait_for_timeout(1200); pg.reload(); pg.wait_for_function('window.PM.proj && PM.proj.items.length>0')
+    chk('autosave kept post-redo state', n()==2 and bool(pg.evaluate('PM.proj.scales[1]')))
+    chk('no errors '+str(errs), not errs); pg.close()
+    ctx=b.new_context(viewport={'width':390,'height':844},device_scale_factor=3,is_mobile=True,has_touch=True); pg=ctx.new_page(); pg.goto(URL)
+    pg.set_input_files('#file2','test/sample-plan.pdf'); pg.wait_for_function('window.PM.proj'); pg.wait_for_timeout(400)
+    pg.tap('[data-tool=count]')
+    r=pg.evaluate("(()=>{const r=document.querySelector('#svg').getBoundingClientRect();return [r.left,r.top]})()")
+    pg.touchscreen.tap(r[0]+60,r[1]+60); pg.wait_for_timeout(600)
+    chk('phone undo visible+enabled', pg.is_visible('#undoBtn') and pg.is_enabled('#undoBtn'))
+    pg.screenshot(path='shots/phone-undo.png', clip={'x':0,'y':0,'width':390,'height':120})
+    pg.tap('#undoBtn'); chk('phone undo', pg.evaluate('PM.proj.items.length')==0)
+    pg.tap('#moreBtn'); chk('redo in phone menu enabled', pg.is_enabled('#redoMenu')); pg.tap('#redoMenu'); chk('phone redo', pg.evaluate('PM.proj.items.length')==1)
+    b.close()
+print('UNDO PASS' if ok else 'UNDO FAIL')

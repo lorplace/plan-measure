@@ -142,3 +142,7 @@ body:not(.caladj) #calSetBtn{display:none}
 @media (min-width:701px) and (max-width:1500px){#tools .tool span.t{display:none}}
 @media (max-width:700px){body.caladj #undoPt{display:none}body.caladj #cancelBtn .t{display:none}body.caladj #ptSel{padding:4px 6px}}
 @media (max-width:700px){body.cal.adj.placing #drawSlot .opt.lp,body.adj.placing #drawSlot .opt.lp{display:none}}
+.btn:disabled{opacity:.4;cursor:default}
+#moreMenu .btn:disabled{opacity:.35}
+@media (min-width:701px){#redoMenu{display:none}}
+@media (max-width:700px){#redoBtn{display:none}#undoBtn{padding:6px}}
