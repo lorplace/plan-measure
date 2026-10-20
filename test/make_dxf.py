@@ -1,0 +1,23 @@
+import ezdxf
+from ezdxf import units
+def make(path, f, insunits):
+    d = ezdxf.new('R2010'); d.units = insunits; d.header['$INSUNITS'] = insunits; m = d.modelspace()
+    for n, c in [('GRID', 1), ('WALLS', 7), ('COLUMNS', 5), ('PIPE', 3), ('FIXTURES', 6), ('TEXT', 7), ('DIMS', 2), ('SLEEVE-PTS', 4)]: d.layers.add(n, color=c)
+    P = lambda x, y: (x * f, y * f)
+    for x in (0, 20, 40): m.add_line(P(x, -5), P(x, 40), dxfattribs={'layer': 'GRID'})
+    for y in (0, 30): m.add_line(P(-5, y), P(45, y), dxfattribs={'layer': 'GRID'})
+    m.add_lwpolyline([P(2, 2), P(38, 2), P(38, 28), P(2, 28)], close=True, dxfattribs={'layer': 'WALLS'})
+    m.add_circle(P(20, 15), 0.5 * f, dxfattribs={'layer': 'COLUMNS'})
+    m.add_arc(P(30, 15), 2 * f, 0, 90, dxfattribs={'layer': 'PIPE'})
+    m.add_line(P(25, 5), P(35, 5), dxfattribs={'layer': 'PIPE'})
+    m.add_point(P(12.5, 8), dxfattribs={'layer': 'SLEEVE-PTS'})
+    b = d.blocks.new('WC'); b.add_lwpolyline([(0, 0), (1.5 * f, 0), (1.5 * f, 2.5 * f), (0, 2.5 * f)], close=True); b.add_circle((0.75 * f, 1.6 * f), 0.6 * f)
+    m.add_blockref('WC', P(32, 22), dxfattribs={'layer': 'FIXTURES', 'rotation': 90})
+    m.add_text('PLAN - LEVEL 1', dxfattribs={'layer': 'TEXT', 'height': 1.0 * f}).set_placement(P(2, 31))
+    m.add_mtext('SLEEVE PLAN\\PSAMPLE', dxfattribs={'layer': 'TEXT', 'char_height': 0.6 * f, 'insert': P(2, -3)})
+    dim = m.add_linear_dim(base=P(0, -2.5), p1=P(0, 0), p2=P(20, 0), dxfattribs={'layer': 'DIMS'}); dim.render()
+    d.saveas(path)
+make('test/sample-feet.dxf', 1, 2)
+make('test/sample-mm.dxf', 304.8, 4)
+make('test/sample-unitless.dxf', 1, 0)
+print('ok')

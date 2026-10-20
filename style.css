@@ -150,3 +150,9 @@ body.aimtool .opt.lp{display:flex}
 #snapBtn.on{background:#00a152;border-color:#00a152;color:#fff}
 body:not(.placing) #loupeBtn,body:not(.placing) #loupeMag{display:none}
 @media (max-width:700px){body.cal.adj.placing #drawSlot .opt.lp,body.adj.placing #drawSlot .opt.lp{display:none}}
+.opt.sz{display:none}body.sleevetool .opt.sz{display:flex}
+.lyr{display:flex;align-items:center;gap:6px;padding:4px 2px;font-size:13px;cursor:pointer}
+#layers h3{display:flex;align-items:center;justify-content:space-between}
+#layers .btn.small{color:#333;background:#e3e9ec;border-color:#cfd8dc;min-height:26px;padding:2px 8px}
+@media (min-width:701px) and (max-width:1500px){#sleeveCsvBtn .t{display:none}}
+@media (max-width:700px){#sleeveCsvBtn{display:none}}

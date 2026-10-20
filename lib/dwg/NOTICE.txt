@@ -1,0 +1,1 @@
+libredwg-web 0.8.1 (https://github.com/mlightcad/libredwg-web), GPL-3.0, based on GNU LibreDWG (https://www.gnu.org/software/libredwg/). Unmodified npm build. Loaded only when a DWG is opened.

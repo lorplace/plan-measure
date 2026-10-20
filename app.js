@@ -3,7 +3,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'lib/pdf.worker.min.js';
 const $ = s => document.querySelector(s);
 const SVGNS = 'http://www.w3.org/2000/svg';
 const vpEl = $('#viewport'), stage = $('#stage'), canvas = $('#canvas'), svg = $('#svg');
-const TYPE_NAMES = {line:'Length', poly:'Pipe run', area:'Area', count:'Count', text:'Note'};
+const TYPE_NAMES = {line:'Length', poly:'Pipe run', area:'Area', count:'Count', text:'Note', sleeve:'Sleeve'};
 
 let doc = null;          // {type,name,bytes,pdf,img,numPages,sizes:[{w,h}],vps:[]}
 let proj = null;         // {id,name,units,scales:{},items:[]}
@@ -22,12 +22,13 @@ function measure(it) {
   const s = scaleOf(it.page);
   if (it.type === 'line' || it.type === 'poly') return s ? polyLen(it.pts) * s + (it.extra || 0) : NaN;
   if (it.type === 'area') return s ? polyArea(it.pts) * s * s : NaN;
-  if (it.type === 'count') return 1;
+  if (it.type === 'count' || it.type === 'sleeve') return 1;
   return NaN;
 }
 function fmtItem(it) {
   const u = proj.units, v = measure(it);
   if (it.type === 'count' || it.type === 'text') return '';
+  if (it.type === 'sleeve') return sleeveText(it);
   if (!isFinite(v)) return 'no scale';
   if (it.type === 'area') return Units.fmtArea(v, u) + ' (perim ' + Units.fmtLen(polyLen(it.pts, true) * scaleOf(it.page), u) + ')';
   return Units.fmtLen(v, u);
@@ -35,11 +36,16 @@ function fmtItem(it) {
 function snapOrtho(prev, p) { if (!prev) return p; const dx = Math.abs(p[0] - prev[0]), dy = Math.abs(p[1] - prev[1]); return dx >= dy ? [p[0], prev[1]] : [prev[0], p[1]]; }
 
 // ---------- loading ----------
+function fileMime(f) { const n = f.name.toLowerCase(); if (n.endsWith('.dxf')) return 'application/dxf'; if (n.endsWith('.dwg')) return 'application/dwg'; return f.type || (n.endsWith('.pdf') ? 'application/pdf' : 'image/png'); }
 async function onFile(e) { const f = e.target.files[0]; if (!f) return; e.target.value = '';
   const bytes = new Uint8Array(await f.arrayBuffer());
-  await loadDoc(bytes, f.type || (f.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/png'), f.name);
-  proj = { id: uid(), name: f.name.replace(/\.[^.]+$/, ''), fileName: f.name, fileType: doc.mime, units: $('#units').value, scales: {}, items: [] };
-  page = 1; resetHist(); fitPage(); await persist(); toast('Opened ' + f.name + '. Set the scale before measuring.');
+  if (fileMime(f) === 'application/dwg') toast('Reading DWG (first time loads a 10 MB converter)...', 8000);
+  try { await loadDoc(bytes, fileMime(f), f.name); } catch (err) { console.error(err); doc = null; layout();
+    return toast(fileMime(f) === 'application/dwg' ? 'Could not read this DWG (' + err.message + '). Save it as DXF from your CAD program, or convert it free with ODA File Converter, then open the DXF.' : 'Could not open file: ' + err.message, 10000); }
+  proj = { id: uid(), name: f.name.replace(/\.[^.]+$/, ''), fileName: f.name, fileType: doc.mime, units: $('#units').value, scales: {}, items: [], origins: {}, hidden: {} };
+  let msg = 'Opened ' + f.name + '. Set the scale before measuring.';
+  if (doc.type === 'cad') { if (doc.cad.unitM) { proj.scales[1] = doc.cad.unitM / doc.cad.k; proj.scaleNames = { 1: 'CAD units: ' + doc.cad.unitName }; msg = 'Opened ' + f.name + ' (' + doc.cad.unitName + '). True scale set from the drawing.'; } else msg = 'Opened ' + f.name + '. Drawing has no units: choose them in Set scale.'; }
+  page = 1; resetHist(); fitPage(); renderLayers(); await persist(); toast(msg, 5000);
 }
 $('#file').addEventListener('change', onFile);
 
@@ -50,6 +56,8 @@ async function loadDoc(bytes, mime, name) {
     doc.pdf = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
     doc.numPages = doc.pdf.numPages;
     for (let i = 1; i <= doc.numPages; i++) { const p = await doc.pdf.getPage(i); const vp = p.getViewport({ scale: 1 }); doc.vps[i] = vp; doc.sizes[i] = { w: vp.width, h: vp.height }; }
+  } else if (mime === 'application/dxf' || mime === 'application/dwg') {
+    doc.type = 'cad'; doc.cad = await CAD.parse(bytes, mime === 'application/dxf' ? 'dxf' : 'dwg'); doc.numPages = 1; doc.sizes[1] = { w: doc.cad.w, h: doc.cad.h };
   } else {
     doc.type = 'image';
     const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
@@ -83,6 +91,8 @@ async function renderCanvas() {
     renderTask = p.render({ canvasContext: off.getContext('2d'), viewport: vp });
     try { await renderTask.promise; } catch (e) { return; }
     renderTask = null; canvas.width = off.width; canvas.height = off.height; ctx.drawImage(off, 0, 0);
+  } else if (doc.type === 'cad') {
+    canvas.width = Math.floor(w * r); canvas.height = Math.floor(h * r); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height); CAD.draw(ctx, doc.cad, r, 0, 0, (proj && proj.hidden) || {});
   } else {
     canvas.width = Math.floor(w * r); canvas.height = Math.floor(h * r); ctx.drawImage(doc.img, 0, 0, canvas.width, canvas.height);
   }
@@ -129,11 +139,11 @@ function draw() {
 function groups() {
   const m = new Map();
   for (const it of proj.items) { if (it.type === 'text') continue;
-    const k = it.type + '|' + (it.label || '') + '|' + it.color; if (!m.has(k)) m.set(k, { type: it.type, label: it.label || '', color: it.color, n: 0, sum: 0, noscale: 0 });
+    const lab = it.type === 'sleeve' ? [it.size, it.label].filter(Boolean).join(' ') : (it.label || ''); const k = it.type + '|' + lab + '|' + it.color; if (!m.has(k)) m.set(k, { type: it.type, label: lab, color: it.color, n: 0, sum: 0, noscale: 0 });
     const gr = m.get(k), v = measure(it); gr.n++; if (isFinite(v)) gr.sum += v; else gr.noscale++; }
   return [...m.values()];
 }
-function fmtGroup(g) { const u = proj.units; if (g.type === 'count') return g.n + ' ea'; if (g.type === 'area') return Units.fmtArea(g.sum, u); return Units.fmtLen(g.sum, u); }
+function fmtGroup(g) { const u = proj.units; if (g.type === 'count' || g.type === 'sleeve') return g.n + ' ea'; if (g.type === 'area') return Units.fmtArea(g.sum, u); return Units.fmtLen(g.sum, u); }
 function renderList() {
   if (!proj) return;
   $('#totals').innerHTML = '<table class="tot">' + groups().map(g => `<tr><td><span class="sw" style="display:inline-block;background:${g.color}"></span></td><td>${TYPE_NAMES[g.type]}${g.label ? ' - ' + esc(g.label) : ''}</td><td><b>${fmtGroup(g)}</b>${g.noscale ? ' *' : ''}</td></tr>`).join('') + '</table>' + (groups().some(g => g.noscale) ? '<small>* some items on pages without scale</small>' : '');
@@ -179,7 +189,9 @@ const HINTS = {
   poly: 'Click each point of the pipe run. Double-click, Enter or Finish to end. Shift = straight.',
   area: 'Click each corner. Double-click, Enter or Finish to close. Shift = straight.',
   count: 'Click each fixture. Set a label and colour first (e.g. WC red, Lav blue).',
-  text: 'Click where the note goes, then type it.'
+  text: 'Click where the note goes, then type it.',
+  sleeve: 'Click to place a sleeve. Choose the size first. Offsets to the nearest lines and X/Y from the origin are shown.',
+  origin: 'Click a gridline intersection or corner to set the 0,0 origin for sleeve coordinates.'
 };
 function setTool(t) { tool = t; draft = null; hover = null; document.querySelectorAll('.tool').forEach(b => b.classList.toggle('active', b.dataset.tool === t)); $('#hint').textContent = HINTS[t]; vpEl.style.cursor = t === 'pan' ? 'grab' : t === 'select' ? 'default' : 'crosshair'; draw(); }
 document.querySelectorAll('.tool').forEach(b => b.onclick = () => setTool(b.dataset.tool));
@@ -209,6 +221,8 @@ function clickAt(p, e) {
     }
     draw();
   } else if (tool === 'count') { p = aim(p, e, null); proj.items.push({ id: uid(), type: 'count', page, pts: [p], color, label: lab }); changed(); }
+  else if (tool === 'sleeve') { p = aim(p, e, null); proj.items.push({ id: uid(), type: 'sleeve', page, pts: [p], color, label: lab, size: $('#sleeveSize').value, text: '' }); changed(); }
+  else if (tool === 'origin') { p = aim(p, e, null); proj.origins = proj.origins || {}; proj.origins[page] = p; changed(); toast('Origin set. Sleeve X/Y are measured from here (Y up).'); }
   else if (tool === 'text') { const t = prompt('Note text:'); if (t) { proj.items.push({ id: uid(), type: 'text', page, pts: [p], color, label: '', text: t }); changed(); } }
 }
 
@@ -243,7 +257,7 @@ vpEl.addEventListener('pointermove', e => {
     if (gesture.kind === 'move' && gesture.moved) { const it = selItem(); const dx = p[0] - gesture.p[0], dy = p[1] - gesture.p[1]; it.pts = gesture.orig.map(q => [q[0] + dx, q[1] + dy]); draw(); return; }
   }
   if (draft) { const prev = draft.pts[draft.pts.length - 1]; hover = aim(p, e, prev); draw(); }
-  else if (tool === 'count' && !gesture) { aim(p, e, null); }
+  else if (['count', 'sleeve', 'origin'].includes(tool) && !gesture) { aim(p, e, null); }
   if (PLACE.includes(tool) && !(draft && draft.type === 'calibrate' && draft.pts.length === 2)) showLoupe(placeSnap(p, e), e); else if (!gesture) hideLoupe();
 });
 function endPointer(e) {
@@ -262,7 +276,7 @@ vpEl.addEventListener('dblclick', e => { if (draft && (draft.type === 'poly' || 
   if (draft.pts.length > 1 && dist(draft.pts[draft.pts.length - 1], draft.pts[draft.pts.length - 2]) < 4 / zoom) draft.pts.pop(); finishDraft(); } });
 document.addEventListener('keydown', e => {
   if (e.key === 'Shift') shiftDown = true;
-  if (e.target.matches('input,textarea,select')) return;
+  if (e.target.matches('input:not([type=checkbox]),textarea,select')) return;
   if (e.key.startsWith('Arrow') && draft && draft.pts.length) { e.preventDefault(); const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key]; nudge(d[0], d[1]); return; }
   if (e.key.toLowerCase() === 'm' && !e.ctrlKey && !e.metaKey) { toggleLoupe(); return; }
   if (e.key === 'Tab' && draft && draft.pts.length > 1) { e.preventDefault(); calSel = (calSel + 1) % draft.pts.length; draw(); return; }
@@ -272,7 +286,7 @@ document.addEventListener('keydown', e => {
   else if (e.key === 'Escape') { draft = null; hover = null; selId = null; draw(); }
   else if (e.key === 'Delete' || (e.key === 'Backspace' && !draft)) deleteSel();
   else if (e.key === 'Backspace' && draft) { draft.pts.pop(); if (!draft.pts.length) draft = null; draw(); }
-  else { const m = { v: 'select', h: 'pan', k: 'calibrate', l: 'line', p: 'poly', a: 'area', c: 'count', t: 'text' }[e.key.toLowerCase()]; if (m && !e.ctrlKey && !e.metaKey) setTool(m); }
+  else { const m = { v: 'select', h: 'pan', k: 'calibrate', l: 'line', p: 'poly', a: 'area', c: 'count', t: 'text', e: 'sleeve', o: 'origin' }[e.key.toLowerCase()]; if (m && !e.ctrlKey && !e.metaKey) setTool(m); }
 });
 document.addEventListener('keyup', e => { if (e.key === 'Shift') shiftDown = false; });
 
@@ -280,8 +294,9 @@ document.addEventListener('keyup', e => { if (e.key === 'Shift') shiftDown = fal
 Units.STD.forEach((s, i) => { const o = document.createElement('option'); o.value = i; o.textContent = s.name; $('#stdScale').appendChild(o); });
 $('#stdScale').value = Units.STD.findIndex(s => s.ratio === 48);
 function applyScale(mPerUnit, name, all) { const pgs = all ? Array.from({ length: doc.numPages }, (_, i) => i + 1) : [page]; proj.scaleNames = proj.scaleNames || {}; pgs.forEach(p => { proj.scales[p] = mPerUnit; proj.scaleNames[p] = name; }); layout(); persistSoon(); commitHist(); toast('Scale set: ' + name); }
-$('#scaleBtn').onclick = () => { if (!doc) return toast('Open a plan first'); $('#imgDpiRow').hidden = doc.type !== 'image'; $('#scaleDlg').showModal(); };
-$('#scaleDlg').addEventListener('close', () => { if ($('#scaleDlg').returnValue !== 'ok') return; const s = Units.STD[$('#stdScale').value];
+$('#scaleBtn').onclick = () => { if (!doc) return toast('Open a plan first'); $('#imgDpiRow').hidden = doc.type !== 'image'; $('#cadUnitRow').hidden = doc.type !== 'cad'; $('#stdScale').hidden = doc.type === 'cad'; $('#scaleDlg').showModal(); };
+$('#scaleDlg').addEventListener('close', () => { if ($('#scaleDlg').returnValue !== 'ok') return; if (doc.type === 'cad') { const u = +$('#cadUnit').value; return applyScale(CAD.UNIT_M[u] / doc.cad.k, 'CAD units: ' + CAD.UNIT_NAME[u], false); }
+  const s = Units.STD[$('#stdScale').value];
   let m = s.mPerPt; if (doc.type === 'image') m = s.ratio * Units.IN / (+$('#imgDpi').value || 150); applyScale(m, s.name, $('#allPages').checked); });
 function openCalibrate() { $('#calVal').value = ''; $('#calDlg').showModal(); }
 $('#calDlg').addEventListener('close', () => {
@@ -319,6 +334,12 @@ const winAnsi = s => String(s).replace(/²/g, '2').replace(/[^\x20-\x7e\xa0-\xff
 async function buildPDF() {
   const { PDFDocument, StandardFonts } = PDFLib; let out, conv;
   if (doc.type === 'pdf') { out = await PDFDocument.load(doc.bytes.slice(), { ignoreEncryption: true }); conv = (pg, p) => doc.vps[pg].convertToPdfPoint(p[0], p[1]); }
+  else if (doc.type === 'cad') {
+    out = await PDFDocument.create(); const { w, h } = doc.sizes[1], M = doc.cad, hid = proj.hidden || {}, pg = out.addPage([w, h]); const f0 = await out.embedFont(StandardFonts.Helvetica);
+    for (const s of M.segs) if (!hid[M.layerNames[s[5]]]) pg.drawLine({ start: { x: s[0], y: h - s[1] }, end: { x: s[2], y: h - s[3] }, thickness: 0.4, color: hexRgb(s[6]) });
+    for (const t of M.texts) if (!hid[M.layerNames[t.L]] && t.text && t.h > 1) t.text.split('\n').forEach((ln, i) => { try { pg.drawText(winAnsi(ln), { x: t.x, y: h - t.y - (t.top ? t.h : 0) - i * t.h * 1.4, size: t.h, font: f0, color: hexRgb(t.col), rotate: PDFLib.degrees(t.rot * 180 / Math.PI) }); } catch (e) { } });
+    conv = (n, p) => [p[0], h - p[1]];
+  }
   else {
     out = await PDFDocument.create(); let img;
     if (doc.mime === 'image/jpeg') img = await out.embedJpg(doc.bytes);
@@ -339,8 +360,15 @@ async function buildPDF() {
     else if (it.type === 'count') { const [x, y] = P[0]; pg.drawCircle({ x, y, size: size * 0.8, color: c, opacity: 0.85 });
       const n = proj.items.filter(o => o.type === 'count' && o.label === it.label && o.color === it.color && o.page === it.page).indexOf(it) + 1; const s = String(n), w = font.widthOfTextAtSize(s, size * 0.8);
       pg.drawText(s, { x: x - w / 2, y: y - size * 0.28, size: size * 0.8, font, color: PDFLib.rgb(1, 1, 1) }); if (it.label) txt(it.label, x, y + size); }
+    else if (it.type === 'sleeve') { const [x, y] = P[0], inf = sleeveInfo(it), dc = PDFLib.rgb(0.1, 0.1, 0.1);
+      if (inf.rx) { const q = conv(it.page, [inf.rx.x, it.pts[0][1]]); pg.drawLine({ start: { x, y }, end: { x: q[0], y: q[1] }, thickness: size / 10, color: c, dashArray: [size / 3, size / 4] }); txt(Units.fmtLen(inf.dx, proj.units), (x + q[0]) / 2, (y + q[1]) / 2 + size / 4, size * 0.8); }
+      if (inf.ry) { const q = conv(it.page, [it.pts[0][0], inf.ry.y]); pg.drawLine({ start: { x, y }, end: { x: q[0], y: q[1] }, thickness: size / 10, color: c, dashArray: [size / 3, size / 4] }); txt(Units.fmtLen(inf.dy, proj.units), (x + q[0]) / 2 + size * 2, (y + q[1]) / 2, size * 0.8); }
+      pg.drawCircle({ x, y, size: size * 0.9, borderColor: c, borderWidth: size / 6, color: PDFLib.rgb(1, 1, 1), opacity: 0.9 }); pg.drawLine({ start: { x: x - size * 0.9, y }, end: { x: x + size * 0.9, y }, thickness: size / 10, color: c }); pg.drawLine({ start: { x, y: y - size * 0.9 }, end: { x, y: y + size * 0.9 }, thickness: size / 10, color: c });
+      txt(sleeveName(it) + ' ' + (it.size || ''), x, y + size * 1.3); }
     else if (it.type === 'text') { (it.text || '').split('\n').forEach((ln, i) => { const s = winAnsi(ln); pg.drawText(s, { x: P[0][0], y: P[0][1] - size * 1.2 * i, size: size * 1.1, font, color: c }); }); }
   }
+  for (const pgn in (proj.origins || {})) { const pg = pages[pgn - 1], o = proj.origins[pgn]; if (!pg || !o) continue; const [x, y] = conv(+pgn, o), s = Math.max(6, Math.min(doc.sizes[pgn].w, doc.sizes[pgn].h) / 90), oc = PDFLib.rgb(0.8, 0.1, 0.5);
+    pg.drawLine({ start: { x: x - 2 * s, y }, end: { x: x + 2 * s, y }, thickness: s / 6, color: oc }); pg.drawLine({ start: { x, y: y - 2 * s }, end: { x, y: y + 2 * s }, thickness: s / 6, color: oc }); pg.drawText('0,0', { x: x + s / 2, y: y + s / 2, size: s, font, color: oc }); }
   // takeoff summary page
   const sp = out.addPage([612, 792]); let y = 750; sp.drawText(winAnsi('Takeoff summary - ' + proj.name), { x: 40, y, size: 16, font }); y -= 30;
   for (const g of groups()) { if (y < 40) break; sp.drawCircle({ x: 46, y: y + 4, size: 5, color: hexRgb(g.color) }); sp.drawText(winAnsi(`${TYPE_NAMES[g.type]}${g.label ? ' - ' + g.label : ''}:  ${fmtGroup(g)}  (${g.n} item${g.n > 1 ? 's' : ''})`), { x: 58, y, size: 11, font }); y -= 18; }
@@ -374,7 +402,7 @@ const ICONS = {
  fit:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>', ruler:'<path d="M3 16L16 3l5 5L8 21z"/><path d="M7 12l2 2M10 9l2 2M13 6l2 2"/>',
  table:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M3 15h18M9 4v16"/>', download:'<path d="M12 3v12M7 10l5 5 5-5M4 20h16"/>',
  panel:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M15 4v16"/>', close:'<path d="M6 6l12 12M18 6L6 18"/>',
- undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-4"/>', redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h4"/>', snap:'<rect x="8" y="8" width="8" height="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>', select:'<path d="M5 3l14 8-6 2-2 6z"/>', loupe:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>', up:'<path d="M5 15l7-7 7 7"/>', down:'<path d="M5 9l7 7 7-7"/>', more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
+ undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-4"/>', redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h4"/>', snap:'<rect x="8" y="8" width="8" height="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>', sleeve:'<circle cx="12" cy="12" r="7"/><path d="M5 12h14M12 5v14"/>', origin:'<path d="M4 20V4M4 20h16"/><circle cx="4" cy="20" r="2"/>', layers:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>', select:'<path d="M5 3l14 8-6 2-2 6z"/>', loupe:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>', up:'<path d="M5 15l7-7 7 7"/>', down:'<path d="M5 9l7 7 7-7"/>', more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
  cal:'<path d="M4 20L20 4"/><circle cx="4" cy="20" r="2"/><circle cx="20" cy="4" r="2"/><path d="M9 9l-2-2M15 15l2 2"/>', line:'<path d="M4 18L20 6"/><path d="M4 14v8M20 2v8"/>',
  poly:'<path d="M3 19h6V9h6v6h6"/><circle cx="3" cy="19" r="1.5"/><circle cx="21" cy="15" r="1.5"/>', area:'<path d="M4 6l12-2 4 10-8 6-8-4z" fill="currentColor" fill-opacity=".25"/>',
  count:'<circle cx="7" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="12" cy="17" r="3"/>', text:'<path d="M5 5h14M12 5v14M9 19h6"/>'
@@ -399,7 +427,7 @@ function placeDrawControls() {
   updateDrawBar(); if (doc) fitPage();
 }
 function updateDrawBar() {
-  const drawing = ['line', 'poly', 'area', 'count', 'text', 'calibrate'].includes(tool);
+  const drawing = ['line', 'poly', 'area', 'count', 'text', 'calibrate', 'sleeve', 'origin'].includes(tool);
   document.body.classList.toggle('drawing', drawing);
   document.body.classList.toggle('multi', tool === 'poly' || tool === 'area');
   document.body.classList.toggle('hasdraft', !!draft);
@@ -454,6 +482,7 @@ async function sharpLoupe() {
     const off = document.createElement('canvas'); off.width = w.L; off.height = w.L; const oc = off.getContext('2d'); oc.fillStyle = '#fff'; oc.fillRect(0, 0, w.L, w.L);
     if (doc.type === 'pdf') { const pg = await doc.pdf.getPage(w.pg); const vp = pg.getViewport({ scale: w.S, offsetX: -(w.p[0] * w.S - w.L / 2), offsetY: -(w.p[1] * w.S - w.L / 2) });
       await pg.render({ canvasContext: oc, viewport: vp }).promise; }
+    else if (doc.type === 'cad') { CAD.draw(oc, doc.cad, w.S, -(w.p[0] * w.S - w.L / 2), -(w.p[1] * w.S - w.L / 2), proj.hidden || {}); }
     else { const h = w.L / 2 / w.S; oc.imageSmoothingEnabled = false; oc.drawImage(doc.img, w.p[0] - h, w.p[1] - h, 2 * h, 2 * h, 0, 0, w.L, w.L); }
     if (loupeWant && lc.style.display !== 'none' && loupeWant.pg === w.pg) { const cur = loupeWant, ctx = lc.getContext('2d');
       if (cur.p[0] === w.p[0] && cur.p[1] === w.p[1] && cur.S === w.S) { ctx.drawImage(off, 0, 0); loupeOverlay(ctx, w.p, w.S, w.L); lc.dataset.sharp = '1'; } }
@@ -479,17 +508,17 @@ $('#loupeMag').addEventListener('change', () => { if (loupeWant) { const r = svg
 vpEl.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !gesture) hideLoupe(); });
 const _udb = updateDrawBar; updateDrawBar = function () { _udb(); const adj = !!draft && draft.pts.length > 0 && PLACE.includes(tool);
   document.body.classList.toggle('adj', adj); document.body.classList.toggle('caladj', !!draft && draft.type === 'calibrate' && draft.pts.length === 2);
-  document.body.classList.toggle('placing', PLACE.includes(tool)); document.body.classList.toggle('aimtool', PLACE.includes(tool) || tool === 'count'); $('#ptSel').textContent = 'Point ' + (Math.min(calSel, draft ? draft.pts.length - 1 : 0) + 1); };
+  document.body.classList.toggle('placing', PLACE.includes(tool)); document.body.classList.toggle('aimtool', PLACE.includes(tool) || ['count', 'sleeve', 'origin'].includes(tool)); document.body.classList.toggle('sleevetool', tool === 'sleeve'); $('#ptSel').textContent = 'Point ' + (Math.min(calSel, draft ? draft.pts.length - 1 : 0) + 1); };
 const _setTool = setTool; setTool = function (t) { hideLoupe(); snapHit = null; _setTool(t); };
 document.querySelectorAll('.tool').forEach(b => b.onclick = () => setTool(b.dataset.tool));
 
 // ---- undo / redo history (snapshots of items + scales, max 100) ----
 const H = { u: [], r: [], cur: null, t: null };
-const snap = () => JSON.stringify({ items: proj.items, scales: proj.scales, scaleNames: proj.scaleNames || {} });
+const snap = () => JSON.stringify({ items: proj.items, scales: proj.scales, scaleNames: proj.scaleNames || {}, origins: proj.origins || {}, hidden: proj.hidden || {} });
 function resetHist() { H.u = []; H.r = []; H.cur = proj ? snap() : null; clearTimeout(H.t); H.t = null; updHistBtns(); }
 function commitHist() { clearTimeout(H.t); H.t = null; if (!proj) return; const s = snap(); if (H.cur !== null && s !== H.cur) { H.u.push(H.cur); if (H.u.length > 100) H.u.shift(); H.r = []; } H.cur = s; updHistBtns(); }
 function commitSoon() { clearTimeout(H.t); H.t = setTimeout(commitHist, 400); updHistBtns(); }
-function restore(s) { const o = JSON.parse(s); proj.items = o.items; proj.scales = o.scales; proj.scaleNames = o.scaleNames; H.cur = s;
+function restore(s) { const o = JSON.parse(s); proj.items = o.items; proj.scales = o.scales; proj.scaleNames = o.scaleNames; proj.origins = o.origins || {}; const hidChanged = JSON.stringify(proj.hidden || {}) !== JSON.stringify(o.hidden || {}); proj.hidden = o.hidden || {}; if (hidChanged) { layersChanged(); renderLayers(); } H.cur = s;
   if (selId && !proj.items.some(i => i.id === selId)) selId = null; layout(); persistSoon(); updHistBtns(); }
 function undo() {
   if (draft && draft.pts.length) { draft.pts.pop(); if (!draft.pts.length) draft = null; draw(); updHistBtns(); return; }
@@ -521,6 +550,10 @@ async function buildGeom(pg) {
   if (geomCache[pg]) return geomCache[pg];
   const G = geomCache[pg] = { segs: [], grid: new Map(), ready: false };
   if (!doc) return G;
+  if (doc.type === 'cad') { const M = doc.cad, hid = proj.hidden || {}; G.pts = []; G.pgrid = new Map();
+    for (const s of M.segs) if (!hid[M.layerNames[s[5]]]) G.segs.push([s[0], s[1], s[2], s[3], s[4], s[5]]);
+    for (const p of M.pts) if (!hid[M.layerNames[p[3]]]) { const i = G.pts.push(p) - 1, k = Math.floor(p[0] / CELL) + ',' + Math.floor(p[1] / CELL); let c = G.pgrid.get(k); if (!c) G.pgrid.set(k, c = []); c.push(i); }
+    G.segs.forEach((s, i) => gridAdd(G.grid, i, s[0], s[1], s[2], s[3])); G.ready = true; return G; }
   if (doc.type === 'image') { const c = document.createElement('canvas'); c.width = doc.sizes[1].w; c.height = doc.sizes[1].h; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(doc.img, 0, 0); G.pix = x.getImageData(0, 0, c.width, c.height); G.ready = true; return G; }
   const page = await doc.pdf.getPage(pg), ops = await page.getOperatorList(), vp = doc.vps[pg], OPS = pdfjsLib.OPS, U = pdfjsLib.Util;
   let ctm = [1, 0, 0, 1, 0, 0]; const stack = [];
@@ -554,7 +587,9 @@ function findSnap(p, r, exclude) {
   for (const it of proj.items) if (it.page === page) for (const q of it.pts) if (q !== exclude) consider(q, 'end', 0);
   if (draft) for (const q of draft.pts) if (q !== exclude) consider(q, 'end', 0);
   if (G && G.ready && G.segs.length) { const ids = nearSegs(G, p, r).slice(0, 400), S = ids.map(i => G.segs[i]);
-    for (const s of S) { consider([s[0], s[1]], 'end', 0); consider([s[2], s[3]], 'end', 0); }
+    for (const s of S) if (!s[4]) { consider([s[0], s[1]], 'end', 0); consider([s[2], s[3]], 'end', 0); }
+    if (G.pgrid) { const c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
+      for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) for (const i of (G.pgrid.get(cx + ',' + cy) || [])) consider([G.pts[i][0], G.pts[i][1]], G.pts[i][2], 0); }
     { const near = S.filter(s => dist(projSeg(p, s), p) <= r).slice(0, 80);
       for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) { const x = segX(near[i], near[j]); if (x) consider(x, 'x', 0); }
       if (!best) for (const s of near) consider(projSeg(p, s), 'line', 2); } }
@@ -582,15 +617,78 @@ function aim(p, e, prev, exclude) {
 }
 function drawSnapMark(ctx, x, y, kind, s, lw) { ctx.save(); ctx.strokeStyle = '#00c853'; ctx.lineWidth = lw; ctx.beginPath();
   if (kind === 'end') ctx.rect(x - s, y - s, 2 * s, 2 * s); else if (kind === 'x') { ctx.moveTo(x - s, y - s); ctx.lineTo(x + s, y + s); ctx.moveTo(x + s, y - s); ctx.lineTo(x - s, y + s); }
+  else if (kind === 'mid') { ctx.moveTo(x, y - s); ctx.lineTo(x + s, y + s); ctx.lineTo(x - s, y + s); ctx.closePath(); } else if (kind === 'center') { ctx.arc(x, y, s, 0, 7); }
   else { ctx.moveTo(x - s, y); ctx.lineTo(x, y - s); ctx.lineTo(x + s, y); ctx.lineTo(x, y + s); ctx.closePath(); } ctx.stroke(); ctx.restore(); }
 function showSnapMark() { let g = svg.querySelector('#snapG'); if (!g) { g = el('g', { id: 'snapG', 'pointer-events': 'none' }, svg); } g.innerHTML = '';
   if (!snapHit) return; const [x, y] = snapHit.p, s = 7 / zoom, w = 2 / zoom, A = { fill: 'none', stroke: '#00c853', 'stroke-width': w };
   if (snapHit.kind === 'end') el('rect', { ...A, x: x - s, y: y - s, width: 2 * s, height: 2 * s }, g);
   else if (snapHit.kind === 'x') el('path', { ...A, d: `M${x - s} ${y - s}L${x + s} ${y + s}M${x + s} ${y - s}L${x - s} ${y + s}` }, g);
+  else if (snapHit.kind === 'mid') el('path', { ...A, d: `M${x} ${y - s}L${x + s} ${y + s}L${x - s} ${y + s}Z` }, g);
+  else if (snapHit.kind === 'center') el('circle', { ...A, cx: x, cy: y, r: s }, g);
   else el('path', { ...A, d: `M${x - s} ${y}L${x} ${y - s}L${x + s} ${y}L${x} ${y + s}Z` }, g);
   g.dataset.kind = snapHit.kind; }
-const _draw3 = draw; draw = function () { _draw3(); if (snapHit && (PLACE.includes(tool) || tool === 'count' || gesture)) showSnapMark(); };
+const _draw3 = draw; draw = function () { _draw3(); if (snapHit && (PLACE.includes(tool) || ['count', 'sleeve', 'origin'].includes(tool) || gesture)) showSnapMark(); };
 const _loadDoc = loadDoc; loadDoc = async function (...a) { for (const k in geomCache) delete geomCache[k]; const r = await _loadDoc(...a); return r; };
 vpEl.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !gesture) { snapHit = null; showSnapMark(); } });
 window.PMsnap = { buildGeom: pg => buildGeom(pg), get hit() { return snapHit; }, geom: geomCache };
-const _rc = renderCanvas; renderCanvas = async function () { await _rc(); if (doc && !geomCache[page]) buildGeom(page); };
+const _rc = renderCanvas; renderCanvas = async function () { await _rc(); if (doc && !geomCache[page]) buildGeom(page).then(() => draw()); };
+
+// ---- CAD layers panel ----
+function layersChanged() { if (!doc || doc.type !== 'cad') return; for (const k in geomCache) delete geomCache[k]; sleeveCache.clear(); renderCanvas(); draw(); }
+function renderLayers() {
+  const box = $('#layers'); if (!doc || doc.type !== 'cad') { box.hidden = true; return; } box.hidden = false; const hid = proj.hidden || {};
+  $('#layerList').innerHTML = doc.cad.layers.map(l => `<label class="lyr"><input type="checkbox" data-layer="${esc(l.name)}" ${hid[l.name] ? '' : 'checked'}><span class="sw" style="background:${l.color}"></span>${esc(l.name)}</label>`).join('');
+  $('#cadInfo').textContent = 'Units: ' + doc.cad.unitName + (doc.cad.unitM ? '' : ' (set in Set scale)');
+}
+$('#layerList').addEventListener('change', e => { const n = e.target.dataset.layer; if (n == null) return; proj.hidden = proj.hidden || {}; if (e.target.checked) delete proj.hidden[n]; else proj.hidden[n] = true; layersChanged(); persistSoon(); commitHist(); });
+$('#layersAll').onclick = () => { proj.hidden = {}; renderLayers(); layersChanged(); persistSoon(); commitHist(); };
+const _openProject = openProject; openProject = async function (id) { await _openProject(id); proj.origins = proj.origins || {}; proj.hidden = proj.hidden || {}; resetHist(); renderLayers(); };
+// ---- sleeves ----
+const sleeveCache = new Map();
+function sleeveName(it) { const n = proj.items.filter(o => o.type === 'sleeve').indexOf(it) + 1; return 'S' + n; }
+function sleeveInfo(it) {
+  const p = it.pts[0], G = geomCache[it.page], key = it.page + ':' + p[0] + ',' + p[1] + ':' + (G && G.ready ? G.segs.length : -1);
+  let r = sleeveCache.get(it.id); if (!r || r.key !== key) {
+    r = { key }; const minLen = 0.015 * Math.min(doc.sizes[it.page].w, doc.sizes[it.page].h);
+    if (G && G.ready && G.segs.length) { let bx = Infinity, by = Infinity;
+      for (const s of G.segs) { if (s[4]) continue; const dx = s[2] - s[0], dy = s[3] - s[1], len = Math.hypot(dx, dy); if (len < minLen) continue;
+        if (Math.abs(dx) <= len * 0.01 && Math.min(s[1], s[3]) <= p[1] + 1e-6 && Math.max(s[1], s[3]) >= p[1] - 1e-6) { const x = (s[0] + s[2]) / 2, d = Math.abs(x - p[0]); if (d > 1e-6 && d < bx) { bx = d; r.rx = { x, L: s[5] }; } }
+        if (Math.abs(dy) <= len * 0.01 && Math.min(s[0], s[2]) <= p[0] + 1e-6 && Math.max(s[0], s[2]) >= p[0] - 1e-6) { const y = (s[1] + s[3]) / 2, d = Math.abs(y - p[1]); if (d > 1e-6 && d < by) { by = d; r.ry = { y, L: s[5] }; } } } }
+    sleeveCache.set(it.id, r); }
+  const s = scaleOf(it.page), o = proj.origins && proj.origins[it.page], out = { rx: r.rx, ry: r.ry };
+  if (s) { if (r.rx) out.dx = Math.abs(r.rx.x - p[0]) * s; if (r.ry) out.dy = Math.abs(r.ry.y - p[1]) * s; if (o) { out.X = (p[0] - o[0]) * s; out.Y = (o[1] - p[1]) * s; } }
+  const ln = L => doc.type === 'cad' && L != null ? doc.cad.layerNames[L] : ''; out.rxLayer = r.rx ? ln(r.rx.L) : ''; out.ryLayer = r.ry ? ln(r.ry.L) : '';
+  return out;
+}
+function sleeveText(it) { const i = sleeveInfo(it), u = proj.units; if (!scaleOf(it.page)) return 'no scale';
+  return (i.X != null ? 'X ' + Units.fmtLen(i.X, u) + ', Y ' + Units.fmtLen(i.Y, u) : 'no origin'); }
+const _drawItem = drawItem; drawItem = function (it, g, isDraft) {
+  if (it.type !== 'sleeve') return _drawItem(it, g, isDraft);
+  const grp = el('g', { 'data-id': it.id }, g), [x, y] = it.pts[0], c = it.color, inf = sleeveInfo(it), u = proj.units, R = 9 / zoom;
+  const dim = (x2, y2, txt, horiz) => { el('line', { x1: x, y1: y, x2, y2, stroke: c, 'stroke-width': 1.2 / zoom, 'stroke-dasharray': `${5 / zoom} ${3 / zoom}`, 'pointer-events': 'none' }, grp);
+    el('line', horiz ? { x1: x2, y1: y2 - 5 / zoom, x2, y2: y2 + 5 / zoom, stroke: c, 'stroke-width': 1.5 / zoom } : { x1: x2 - 5 / zoom, y1: y2, x2: x2 + 5 / zoom, y2, stroke: c, 'stroke-width': 1.5 / zoom }, grp);
+    if (txt) label(grp, horiz ? (x + x2) / 2 : x + 4 / zoom, horiz ? y - 4 / zoom : (y + y2) / 2, txt, c).setAttribute('text-anchor', horiz ? 'middle' : 'start'); };
+  if (inf.rx) dim(inf.rx.x, y, inf.dx != null ? Units.fmtLen(inf.dx, u) : '', true);
+  if (inf.ry) dim(x, inf.ry.y, inf.dy != null ? Units.fmtLen(inf.dy, u) : '', false);
+  el('circle', { cx: x, cy: y, r: R, fill: '#fff', 'fill-opacity': 0.85, stroke: c, 'stroke-width': 2.5 / zoom }, grp);
+  el('path', { d: `M${x - R} ${y}H${x + R}M${x} ${y - R}V${y + R}`, stroke: c, 'stroke-width': 1.2 / zoom }, grp);
+  label(grp, x, y - R - 4 / zoom, sleeveName(it) + ' ' + (it.size || '') + (it.label ? ' ' + it.label : ''), c);
+  if (it.id === selId) el('rect', { x: x - 6 / zoom, y: y - 6 / zoom, width: 12 / zoom, height: 12 / zoom, fill: 'none', stroke: '#1976d2', 'stroke-width': 2 / zoom, 'data-v': 0, class: 'handle' }, grp);
+};
+const _draw4 = draw; draw = function () { _draw4(); const o = proj && proj.origins && proj.origins[page]; if (!o) return; const g = el('g', { 'pointer-events': 'none' }, svg), s = 14 / zoom, w = 2 / zoom;
+  el('path', { d: `M${o[0] - s} ${o[1]}H${o[0] + s}M${o[0]} ${o[1] - s}V${o[1] + s}`, stroke: '#c2185b', 'stroke-width': w }, g); el('circle', { cx: o[0], cy: o[1], r: s / 2, fill: 'none', stroke: '#c2185b', 'stroke-width': w }, g);
+  const t = label(g, o[0] + s, o[1] - s / 2, '0,0', '#c2185b'); t.setAttribute('text-anchor', 'start'); };
+// sleeve edit: size + note
+const _renderList = renderList; renderList = function () { _renderList(); const it = proj && proj.items.find(i => i.id === selId); $('#eSizeRow').hidden = !(it && it.type === 'sleeve'); if (it && it.type === 'sleeve') { $('#eSize').value = it.size || ''; $('#eTextRow').hidden = false; if (document.activeElement !== $('#eText')) $('#eText').value = it.text || ''; } };
+$('#eSize').addEventListener('change', e => { const it = selItem(); if (it) { it.size = e.target.value; changed(); } });
+// sleeve schedule CSV
+function buildSleeveCSV() {
+  const u = proj.units, f = v => v == null ? '' : Units.fmtLen(v, u), dec = v => v == null ? '' : (u === 'met' ? v : v / Units.FT).toFixed(4), lu = u === 'met' ? 'm' : 'ft';
+  const rows = [['Sleeve schedule', proj.name], ['Origin', Object.keys(proj.origins || {}).length ? 'set (Y up)' : 'not set'], [],
+    ['ID', 'Size', 'Label', 'X from origin', 'Y from origin', `X (${lu})`, `Y (${lu})`, 'Offset to nearest vertical line', 'Offset to nearest horizontal line', `Offset X (${lu})`, `Offset Y (${lu})`, 'Ref X layer', 'Ref Y layer', 'Level / page', 'Note']];
+  proj.items.filter(i => i.type === 'sleeve').forEach(it => { const i = sleeveInfo(it);
+    rows.push([sleeveName(it), it.size || '', it.label || '', f(i.X), f(i.Y), dec(i.X), dec(i.Y), f(i.dx), f(i.dy), dec(i.dx), dec(i.dy), i.rxLayer, i.ryLayer, doc.type === 'cad' ? proj.name : 'Page ' + it.page, it.text || '']); });
+  return rows.map(r => r.map(csvCell).join(',')).join('\r\n');
+}
+$('#sleeveCsvBtn').onclick = () => { if (!proj) return; if (!proj.items.some(i => i.type === 'sleeve')) return toast('No sleeves yet. Use the Sleeve tool.'); download('\ufeff' + buildSleeveCSV(), proj.name + '-sleeves.csv', 'text/csv'); };
+Object.assign(window.PM, { buildSleeveCSV, sleeveInfo }); Object.defineProperty(window.PM, 'origins', { get: () => proj.origins });
