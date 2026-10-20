@@ -57,3 +57,69 @@ dialog select{background:#fff;color:#222;border-color:#cfd8dc;width:100%}
 .sidehead .btn{color:#333}
 @media (max-width:1440px){#saveBtn .t,#projBtn .t,#fit .t,#panelBtn .t{display:none}#bar .btn{padding:6px 8px}}
 #side .sidehead .btn{color:#37474f}
+/* ---- empty state ---- */
+#empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;padding:20px}
+body.hasdoc #empty{display:none}body:not(.hasdoc) #stage{display:none}
+.emptybox{background:#fff;border-radius:14px;padding:32px 28px;text-align:center;max-width:380px;box-shadow:0 8px 30px #0005;color:#37474f}
+.emptybox h2{margin:8px 0 6px;font-size:22px}.emptybox p{margin:0 0 18px;color:#607d8b}
+svg.ic.big{width:56px;height:56px;color:#1e88e5;stroke-width:1.4}
+.bigbtn{font-size:16px;padding:12px 22px;min-height:46px}
+#drawBar,#moreBtn,#sheetHandle{display:none}
+#moreMenu[hidden]{display:none}
+#moreMenu{position:fixed;z-index:20;top:calc(52px + env(safe-area-inset-top));right:calc(8px + env(safe-area-inset-right));background:#263238;border:1px solid #40535d;border-radius:10px;padding:6px;display:flex;flex-direction:column;gap:4px;min-width:210px;box-shadow:0 8px 24px #0008}
+#moreMenu .btn{justify-content:flex-start;min-height:44px;font-size:15px;background:transparent;border-color:transparent}
+#moreMenu .btn:hover{background:#34454e}
+.mrow{display:flex;align-items:center;justify-content:space-between;color:#e6eef2;padding:4px 10px;font-size:15px;gap:8px}
+button,label,select,input{touch-action:manipulation}
+/* ---- phone ---- */
+@media (max-width:700px){
+  body{padding:env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left)}
+  #bar{padding:6px 8px;gap:4px;flex-wrap:nowrap}
+  #bar .sep,#saveBtn,#projBtn,#zoomOut,#zoomIn,#zoomInfo,#fit,#scaleBtn,#units,#csvBtn,#pdfBtn,#panelBtn,#bar .grow{display:none}
+  #moreBtn{display:inline-flex;margin-left:auto}
+  #bar label.btn.primary .t{display:inline}
+  #prev,#next{padding:6px}
+  #pageInfo{min-width:38px;font-size:13px}
+  .scale{background:#34454e;border:1px solid #40535d;border-radius:16px;padding:6px 10px;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:130px;cursor:pointer}
+  #main{flex-direction:column;order:2}
+  #tools{order:4;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:6px 6px calc(6px + env(safe-area-inset-bottom));gap:4px;background:#1c262b;border-top:1px solid #0d1417;border-bottom:none;scrollbar-width:none}
+  #tools::-webkit-scrollbar{display:none}
+  #tools .tool{flex-direction:column;gap:2px;min-width:58px;min-height:52px;padding:5px 6px;font-size:11px;background:transparent;border-color:transparent;color:#cfd8dc}
+  #tools .tool span.t{display:inline!important}
+  #tools .tool svg.ic{width:22px;height:22px}
+  #tools .tool.active{background:#ffb300;color:#1c262b}
+  #tools .hint{display:none}
+  #drawBar{order:3;display:none;align-items:center;gap:6px;padding:6px 8px;background:#2b3a42;border-top:1px solid #0d1417;overflow-x:auto}
+  body.hasdoc.drawing #drawBar{display:flex}
+  #drawSlot{display:flex;align-items:center;gap:6px;flex:1;min-width:0}
+  #drawSlot .opt label{font-size:0;gap:0}  /* hide words, keep inputs */
+  #drawSlot .opt input[type=text]{width:100%;min-width:90px;font-size:16px}
+  #drawSlot .opt:nth-child(2){flex:1}
+  #finishBtn,#undoPt{display:none}
+  body.multi #finishBtn,body.hasdraft #undoPt{display:inline-flex}
+  body.cal #drawSlot .opt{display:none}
+  #drawBar .btn{min-height:40px;white-space:nowrap}
+  #finishBtn{background:#1e88e5;border-color:#1e88e5;color:#fff}
+  #viewport{flex:1}
+  #stage{margin:10px}
+  #side{width:auto;order:2;max-height:44px;overflow:hidden;padding:0;border-left:none;border-top:1px solid #0d1417;border-radius:14px 14px 0 0;box-shadow:0 -4px 16px #0004;transition:max-height .2s}
+  body:not(.hasdoc) #side{display:none}
+  body.noside #side{display:block}
+  body.sheetopen #side{max-height:58vh;overflow:auto}
+  #sheetHandle{display:flex;align-items:center;gap:8px;height:44px;padding:0 12px;position:sticky;top:0;background:#f7f9fa;cursor:pointer;font-size:13px;color:#263238}
+  #sheetHandle .grip{position:absolute;left:50%;top:5px;width:36px;height:4px;margin-left:-18px;border-radius:2px;background:#b0bec5}
+  #sheetSum{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;padding-top:4px}
+  .chev{color:#1e88e5;font-weight:600;padding-top:4px}
+  #side>*:not(#sheetHandle){margin-left:12px;margin-right:12px}
+  .sidehead .btn{display:none}
+  input,select,textarea{font-size:16px!important}
+  dialog{width:92vw;max-width:92vw}
+  .row{padding:9px 5px;font-size:14px}
+}
+@media (max-width:700px){
+  #bar label.btn.primary{white-space:nowrap;padding:6px 10px}
+  #bar label.btn.primary .t{font-size:0}#bar label.btn.primary .t::after{content:"Open";font-size:14px}
+  .scale{max-width:none;flex:1;min-width:0}
+  #moreBtn{margin-left:0}#moreBtn .t{display:none}
+  #toast{bottom:calc(150px + env(safe-area-inset-bottom));max-width:90vw;text-align:center}
+}

@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>Plan Measure - PDF plan viewer and takeoff</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="style.css"></head>
@@ -14,12 +14,13 @@
   <span class="sep"></span>
   <button id="zoomOut" class="btn icon" data-icon="minus" title="Zoom out"></button><span id="zoomInfo">100%</span><button id="zoomIn" class="btn icon" data-icon="plus" title="Zoom in"></button><button id="fit" class="btn" data-icon="fit" title="Fit page">Fit</button>
   <span class="sep"></span>
-  <span id="scaleInfo" class="scale">Scale: not set</span>
+  <span id="scaleInfo" class="scale" role="button" title="Set scale">Scale: not set</span>
   <button id="scaleBtn" class="btn" data-icon="ruler">Set scale</button>
   <select id="units" title="Units"><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select>
   <span class="sep"></span>
   <span class="grow"></span><button id="csvBtn" class="btn" data-icon="table">Export CSV</button>
   <button id="pdfBtn" class="btn" data-icon="download">Export PDF</button>
+  <button id="moreBtn" class="btn icon" data-icon="more" title="More">More</button>
   <button id="panelBtn" class="btn" data-icon="panel" title="Show/hide takeoff panel">Takeoff</button>
 </header>
 <nav id="tools">
@@ -37,9 +38,20 @@
   <button id="undoPt" class="btn small" title="Remove last point (Backspace)">Undo point</button>
   <div class="hint" id="hint">Open a PDF or image plan to start.</div>
 </nav>
+<div id="drawBar"><div id="drawSlot"></div><button id="cancelBtn" class="btn small" data-icon="close">Cancel</button></div>
+<div id="moreMenu" hidden>
+  <button class="btn" data-icon="ruler" data-proxy="#scaleBtn">Set scale</button>
+  <button class="btn" data-icon="fit" data-proxy="#fit">Fit page</button>
+  <button class="btn" data-icon="save" data-proxy="#saveBtn">Save</button>
+  <button class="btn" data-icon="folder" data-proxy="#projBtn">Projects</button>
+  <label class="mrow">Units <select id="units2"><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select></label>
+  <button class="btn" data-icon="table" data-proxy="#csvBtn">Export CSV</button>
+  <button class="btn" data-icon="download" data-proxy="#pdfBtn">Export PDF</button>
+</div>
 <main id="main">
-  <div id="viewport"><div id="stage"><canvas id="canvas"></canvas><svg id="svg"></svg></div></div>
+  <div id="viewport"><div id="empty"><div class="emptybox"><svg class="ic big" viewBox="0 0 24 24"><path d="M4 3h11l5 5v13H4z"/><path d="M15 3v5h5M8 13h8M8 17h5"/></svg><h2>Open a plan</h2><p>PDF or image (PNG, JPG). Your file stays on this device.</p><label class="btn primary bigbtn">Open plan<input id="file2" type="file" accept="application/pdf,image/*" hidden></label></div></div><div id="stage"><canvas id="canvas"></canvas><svg id="svg"></svg></div></div>
   <aside id="side">
+    <div id="sheetHandle"><span class="grip"></span><span id="sheetSum">Takeoff</span><span class="chev">Show</span></div>
     <div class="sidehead"><h3>Takeoff totals</h3><button id="panelClose" class="btn icon small" data-icon="close" title="Hide panel"></button></div>
     <div id="totals"></div>
     <h3>Items <small>(this page: <span id="pgOnly"><input type="checkbox" id="pageOnly" checked></span>)</small></h3>

@@ -35,12 +35,13 @@ function fmtItem(it) {
 function snapOrtho(prev, p) { if (!prev) return p; const dx = Math.abs(p[0] - prev[0]), dy = Math.abs(p[1] - prev[1]); return dx >= dy ? [p[0], prev[1]] : [prev[0], p[1]]; }
 
 // ---------- loading ----------
-$('#file').addEventListener('change', async e => { const f = e.target.files[0]; if (!f) return; e.target.value = '';
+async function onFile(e) { const f = e.target.files[0]; if (!f) return; e.target.value = '';
   const bytes = new Uint8Array(await f.arrayBuffer());
   await loadDoc(bytes, f.type || (f.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/png'), f.name);
   proj = { id: uid(), name: f.name.replace(/\.[^.]+$/, ''), fileName: f.name, fileType: doc.mime, units: $('#units').value, scales: {}, items: [] };
   page = 1; fitPage(); await persist(); toast('Opened ' + f.name + '. Set the scale before measuring.');
-});
+}
+$('#file').addEventListener('change', onFile);
 
 async function loadDoc(bytes, mime, name) {
   doc = { name, mime, bytes, sizes: [], vps: [] };
@@ -59,7 +60,7 @@ async function loadDoc(bytes, mime, name) {
 
 // ---------- rendering ----------
 function layout() {
-  if (!doc) return; const { w, h } = doc.sizes[page];
+  document.body.classList.toggle('hasdoc', !!doc); if (!doc) return; const { w, h } = doc.sizes[page];
   stage.style.width = w * zoom + 'px'; stage.style.height = h * zoom + 'px';
   canvas.style.width = w * zoom + 'px'; canvas.style.height = h * zoom + 'px';
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
@@ -119,7 +120,7 @@ function draw() {
   svg.innerHTML = ''; if (!proj) return;
   const g = el('g', {}, svg);
   proj.items.filter(i => i.page === page).forEach(i => drawItem(i, g));
-  if (draft) { const pts = hover ? draft.pts.concat([hover]) : draft.pts; if (pts.length) drawItem({ ...draft, pts, label: draft.label }, g, true); }
+  if (draft) { const pts = hover ? draft.pts.concat([hover]) : draft.pts; if (pts.length) drawItem({ ...draft, pts, page, label: draft.label }, g, true); }
   renderList();
 }
 
@@ -364,6 +365,40 @@ const ICONS = {
 document.querySelectorAll('[data-icon]').forEach(b => { const txt = [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
   [...b.childNodes].filter(n => n.nodeType === 3).forEach(n => n.remove());
   b.insertAdjacentHTML('afterbegin', `<svg class="ic" viewBox="0 0 24 24">${ICONS[b.dataset.icon]}</svg>` + (txt ? `<span class="t">${txt}</span>` : '')); });
-function togglePanel(force) { document.body.classList.toggle('noside', force); localStorage.setItem('pm-noside', document.body.classList.contains('noside') ? 1 : ''); if (doc) layout(); }
+function togglePanel(force) { document.body.classList.toggle('noside', force); localStorage.setItem('pm-noside', document.body.classList.contains('noside') ? 1 : ''); if (doc) fitPage(); }
 $('#panelBtn').onclick = () => togglePanel(); $('#panelClose').onclick = () => togglePanel(true);
 if (localStorage.getItem('pm-noside')) document.body.classList.add('noside');
+// ---- phone layout ----
+ICONS.more = '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>'; $('#moreBtn svg').innerHTML = ICONS.more;
+document.querySelectorAll('#moreBtn,#moreMenu [data-icon],#cancelBtn').forEach(b => { if (b.querySelector('svg')) return; const txt = b.textContent.trim(); b.textContent = '';
+  b.insertAdjacentHTML('afterbegin', `<svg class="ic" viewBox="0 0 24 24">${ICONS[b.dataset.icon]}</svg><span class="t">${txt}</span>`); });
+$('#file2').addEventListener('change', onFile);
+const phoneMQ = matchMedia('(max-width: 700px)');
+const drawEls = ['.opt:nth-of-type(1)', '.opt:nth-of-type(2)'];
+function placeDrawControls() {
+  const opts = [...document.querySelectorAll('.opt')], fin = $('#finishBtn'), und = $('#undoPt');
+  if (phoneMQ.matches) { [...opts, und, fin].forEach(n => $('#drawSlot').appendChild(n)); }
+  else { const hint = $('#hint'); [...opts, fin, und].forEach(n => $('#tools').insertBefore(n, hint)); }
+  updateDrawBar(); if (doc) fitPage();
+}
+function updateDrawBar() {
+  const drawing = ['line', 'poly', 'area', 'count', 'text', 'calibrate'].includes(tool);
+  document.body.classList.toggle('drawing', drawing);
+  document.body.classList.toggle('multi', tool === 'poly' || tool === 'area');
+  document.body.classList.toggle('hasdraft', !!draft);
+  document.body.classList.toggle('cal', tool === 'calibrate');
+}
+phoneMQ.addEventListener('change', placeDrawControls);
+const _draw = draw; draw = function () { _draw(); updateDrawBar(); updateSheet(); };
+$('#cancelBtn').onclick = () => { if (draft) { draft = null; hover = null; draw(); } else setTool('select'); };
+$('#moreBtn').onclick = e => { e.stopPropagation(); $('#moreMenu').hidden = !$('#moreMenu').hidden; };
+document.addEventListener('click', e => { if (!e.target.closest('#moreMenu,#moreBtn')) $('#moreMenu').hidden = true; });
+$('#moreMenu').addEventListener('click', e => { const b = e.target.closest('[data-proxy]'); if (!b) return; $('#moreMenu').hidden = true; $(b.dataset.proxy).click(); });
+$('#units2').addEventListener('change', e => { $('#units').value = e.target.value; $('#units').dispatchEvent(new Event('change')); });
+$('#scaleInfo').onclick = () => $('#scaleBtn').click();
+$('#sheetHandle').onclick = () => { document.body.classList.toggle('sheetopen'); updateSheet(); };
+function updateSheet() { if (!proj) return; const g = groups(); $('#units2').value = proj.units;
+  $('#sheetSum').textContent = g.length ? g.slice(0, 3).map(x => (x.label || TYPE_NAMES[x.type]) + ' ' + fmtGroup(x)).join('  |  ') + (g.length > 3 ? '  ...' : '') : 'Takeoff: no items yet';
+  $('.chev').textContent = document.body.classList.contains('sheetopen') ? 'Hide' : 'Show'; }
+document.addEventListener('gesturestart', e => e.preventDefault());
+placeDrawControls(); layout();
