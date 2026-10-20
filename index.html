@@ -6,31 +6,32 @@
 <link rel="stylesheet" href="style.css"></head>
 <body>
 <header id="bar">
-  <label class="btn primary">Open plan<input id="file" type="file" accept="application/pdf,image/*" hidden></label>
-  <button id="saveBtn" class="btn">Save</button>
-  <button id="projBtn" class="btn">Projects</button>
+  <label class="btn primary" data-icon="open">Open plan<input id="file" type="file" accept="application/pdf,image/*" hidden></label>
+  <button id="saveBtn" class="btn" title="Save project" data-icon="save">Save</button>
+  <button id="projBtn" class="btn" title="Saved projects" data-icon="folder">Projects</button>
   <span class="sep"></span>
-  <button id="prev" class="btn">Prev</button><span id="pageInfo">-</span><button id="next" class="btn">Next</button>
+  <button id="prev" class="btn icon" data-icon="left" title="Previous page"></button><span id="pageInfo">-</span><button id="next" class="btn icon" data-icon="right" title="Next page"></button>
   <span class="sep"></span>
-  <button id="zoomOut" class="btn">-</button><span id="zoomInfo">100%</span><button id="zoomIn" class="btn">+</button><button id="fit" class="btn">Fit</button>
+  <button id="zoomOut" class="btn icon" data-icon="minus" title="Zoom out"></button><span id="zoomInfo">100%</span><button id="zoomIn" class="btn icon" data-icon="plus" title="Zoom in"></button><button id="fit" class="btn" data-icon="fit" title="Fit page">Fit</button>
   <span class="sep"></span>
   <span id="scaleInfo" class="scale">Scale: not set</span>
-  <button id="scaleBtn" class="btn">Set scale</button>
+  <button id="scaleBtn" class="btn" data-icon="ruler">Set scale</button>
   <select id="units" title="Units"><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select>
   <span class="sep"></span>
-  <button id="csvBtn" class="btn">Export CSV</button>
-  <button id="pdfBtn" class="btn">Export PDF</button>
+  <span class="grow"></span><button id="csvBtn" class="btn" data-icon="table">Export CSV</button>
+  <button id="pdfBtn" class="btn" data-icon="download">Export PDF</button>
+  <button id="panelBtn" class="btn" data-icon="panel" title="Show/hide takeoff panel">Takeoff</button>
 </header>
 <nav id="tools">
-  <button data-tool="select" class="tool active" title="Select / edit (V)">Select</button>
-  <button data-tool="pan" class="tool" title="Pan (H)">Pan</button>
-  <button data-tool="calibrate" class="tool" title="Calibrate scale with 2 points (K)">Calibrate</button>
-  <button data-tool="line" class="tool" title="Length (L)">Length</button>
-  <button data-tool="poly" class="tool" title="Pipe run / polyline (P)">Pipe run</button>
-  <button data-tool="area" class="tool" title="Area (A)">Area</button>
-  <button data-tool="count" class="tool" title="Count fixtures (C)">Count</button>
-  <button data-tool="text" class="tool" title="Text note (T)">Note</button>
-  <div class="opt"><label>Colour <input id="color" type="color" value="#e53935"></label></div>
+  <button data-tool="select" data-icon="select" class="tool active" title="Select / edit (V)">Select</button>
+  <button data-tool="pan" data-icon="hand" class="tool" title="Pan (H)">Pan</button>
+  <button data-tool="calibrate" data-icon="cal" class="tool" title="Calibrate scale with 2 points (K)">Calibrate</button>
+  <button data-tool="line" data-icon="line" class="tool" title="Length (L)">Length</button>
+  <button data-tool="poly" data-icon="poly" class="tool" title="Pipe run / polyline (P)">Pipe run</button>
+  <button data-tool="area" data-icon="area" class="tool" title="Area (A)">Area</button>
+  <button data-tool="count" data-icon="count" class="tool" title="Count fixtures (C)">Count</button>
+  <button data-tool="text" data-icon="text" class="tool" title="Text note (T)">Note</button>
+  <span class="sep"></span><div class="opt"><label>Colour <input id="color" type="color" value="#e53935"></label></div>
   <div class="opt"><label>Label <input id="label" type="text" placeholder="e.g. WC, 3/4 PEX" size="10"></label></div>
   <button id="finishBtn" class="btn small" title="Finish run / area (Enter)">Finish</button>
   <button id="undoPt" class="btn small" title="Remove last point (Backspace)">Undo point</button>
@@ -39,7 +40,7 @@
 <main id="main">
   <div id="viewport"><div id="stage"><canvas id="canvas"></canvas><svg id="svg"></svg></div></div>
   <aside id="side">
-    <h3>Takeoff</h3>
+    <div class="sidehead"><h3>Takeoff totals</h3><button id="panelClose" class="btn icon small" data-icon="close" title="Hide panel"></button></div>
     <div id="totals"></div>
     <h3>Items <small>(this page: <span id="pgOnly"><input type="checkbox" id="pageOnly" checked></span>)</small></h3>
     <div id="list"></div>
