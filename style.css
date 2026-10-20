@@ -123,3 +123,22 @@ button,label,select,input{touch-action:manipulation}
   #moreBtn{margin-left:0}#moreBtn .t{display:none}
   #toast{bottom:calc(150px + env(safe-area-inset-bottom));max-width:90vw;text-align:center}
 }
+/* ---- loupe ---- */
+#loupe{position:fixed;width:140px;height:140px;border-radius:50%;border:3px solid #263238;box-shadow:0 4px 18px #0007,0 0 0 2px #fff inset;pointer-events:none;z-index:30;display:none;background:#fff}
+#loupeBtn.on{background:#1e88e5;border-color:#1e88e5;color:#fff}
+.opt.lp{display:none;gap:4px;align-items:center}body.placing .opt.lp{display:flex}
+.opt.lp select{min-height:30px;padding:2px 4px}
+.opt.calbar{display:none;gap:4px;align-items:center}body.adj .opt.calbar{display:flex}
+body:not(.caladj) #calSetBtn{display:none}
+.nud{padding:4px 6px!important}
+@media (max-width:700px){
+  body.cal #drawSlot .opt.lp,body.cal #drawSlot .opt.calbar{display:none}
+  body.cal.placing #drawSlot .opt.lp{display:flex}body.cal.adj #drawSlot .opt.calbar{display:flex}
+  body.adj #drawSlot .opt.lp{display:none}
+  #drawSlot{overflow-x:auto}
+  .nud{min-width:40px;justify-content:center}
+}
+@media (min-width:701px){#tools{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin}#tools>*{flex:none}#tools .hint{flex:1 1 0;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+@media (min-width:701px) and (max-width:1500px){#tools .tool span.t{display:none}}
+@media (max-width:700px){body.caladj #undoPt{display:none}body.caladj #cancelBtn .t{display:none}body.caladj #ptSel{padding:4px 6px}}
+@media (max-width:700px){body.cal.adj.placing #drawSlot .opt.lp,body.adj.placing #drawSlot .opt.lp{display:none}}

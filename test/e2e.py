@@ -36,7 +36,7 @@ with sync_playwright() as p:
     print('counts',sum(1 for i in items if i['t']=='count'))
     # page 2: calibrate on the 5 m line, then measure the 4x3 m rectangle
     pg.click('#next'); pg.wait_for_timeout(400); pg.select_option('#units','met')
-    pg.click('[data-tool=calibrate]'); click(144,300); click(144+50*MM,300); pg.fill('#calVal','5000mm'); pg.keyboard.press('Enter'); pg.wait_for_timeout(200)
+    pg.click('[data-tool=calibrate]'); click(144,300); click(144+50*MM,300); pg.click('#calSetBtn'); pg.fill('#calVal','5000mm'); pg.keyboard.press('Enter'); pg.wait_for_timeout(200)
     pg.click('[data-tool=line]'); click(144,400); click(144+40*MM,400)
     pg.click('[data-tool=area]')
     for x,y in [(144,400),(144+40*MM,400),(144+40*MM,400+30*MM),(144,400+30*MM)]: click(x,y)

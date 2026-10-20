@@ -120,7 +120,8 @@ function draw() {
   svg.innerHTML = ''; if (!proj) return;
   const g = el('g', {}, svg);
   proj.items.filter(i => i.page === page).forEach(i => drawItem(i, g));
-  if (draft) { const pts = hover ? draft.pts.concat([hover]) : draft.pts; if (pts.length) drawItem({ ...draft, pts, page, label: draft.label }, g, true); }
+  if (draft) { const full = draft.type === 'calibrate' && draft.pts.length === 2; const pts = hover && !full ? draft.pts.concat([hover]) : draft.pts; if (pts.length) drawItem({ ...draft, pts, page, label: draft.label }, g, true);
+    const q = draft.pts[calSel]; if (q) el('circle', { cx: q[0], cy: q[1], r: 7 / zoom, fill: 'none', stroke: '#ffb300', 'stroke-width': 2.5 / zoom }, g); }
   renderList();
 }
 
@@ -186,6 +187,7 @@ function pagePt(e) { const r = svg.getBoundingClientRect(); return [(e.clientX -
 
 function finishDraft() {
   if (!draft) return;
+  if (draft.type === 'calibrate') { if (draft.pts.length === 2) openCalibrate(); return; }
   const need = { line: 2, poly: 2, area: 3 }[draft.type];
   if (draft.pts.length >= need) { const it = { id: uid(), type: draft.type, page, pts: draft.pts, color: draft.color, label: draft.label }; proj.items.push(it); selId = null; }
   draft = null; hover = null; changed();
@@ -200,9 +202,10 @@ function clickAt(p, e) {
     if (!draft) draft = { type: tool, pts: [], color: tool === 'calibrate' ? '#1976d2' : color, label: lab };
     const prev = draft.pts[draft.pts.length - 1]; if (e.shiftKey || shiftDown) p = snapOrtho(prev, p);
     if (prev && dist(prev, p) < 1e-6) return;
-    draft.pts.push(p);
+    if (tool === 'calibrate' && draft.pts.length >= 2) return;
+    draft.pts.push(p); calSel = draft.pts.length - 1;
     if ((tool === 'line' || tool === 'calibrate') && draft.pts.length === 2) {
-      if (tool === 'line') finishDraft(); else openCalibrate();
+      if (tool === 'line') finishDraft(); else { calSel = 1; toast('Adjust points if needed (drag, arrows), then Set distance.', 4000); }
     }
     draw();
   } else if (tool === 'count') { proj.items.push({ id: uid(), type: 'count', page, pts: [p], color, label: lab }); changed(); }
@@ -213,10 +216,12 @@ function clickAt(p, e) {
 const pointers = new Map(); let gesture = null;
 vpEl.addEventListener('pointerdown', e => {
   if (!doc) return; vpEl.setPointerCapture(e.pointerId); pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (pointers.size === 2) { const [a, b] = [...pointers.values()]; gesture = { kind: 'pinch', d: Math.hypot(a.x - b.x, a.y - b.y), z: zoom }; return; }
+  if (pointers.size === 2) { const [a, b] = [...pointers.values()]; gesture = { kind: 'pinch', d: Math.hypot(a.x - b.x, a.y - b.y), z: zoom, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 }; hideLoupe(); return; }
   const p = pagePt(e);
   gesture = { kind: 'maybe', sx: e.clientX, sy: e.clientY, sl: vpEl.scrollLeft, st: vpEl.scrollTop, p, moved: false };
   if (e.button === 1 || tool === 'pan') { gesture.kind = 'pan'; return; }
+  if (draft && PLACE.includes(tool)) { const k = draft.pts.findIndex(q => dist(q, p) * zoom < (e.pointerType === 'touch' ? 22 : 10)); if (k >= 0 && (draft.type === 'calibrate' ? draft.pts.length === 2 : true)) { gesture.kind = 'dpt'; gesture.v = k; calSel = k; gesture.off = [draft.pts[k][0] - p[0], draft.pts[k][1] - p[1]]; showLoupe(draft.pts[k], e); draw(); return; } }
+  if (e.pointerType !== 'mouse' && PLACE.includes(tool) && !(tool === 'calibrate' && draft && draft.pts.length === 2)) { gesture.kind = 'place'; hover = placeSnap(p, e); showLoupe(hover, e); draw(); return; }
   if (tool === 'select') {
     const h = e.target.closest('.handle'), g = e.target.closest('g[data-id]');
     if (h && selId) { gesture.kind = 'vertex'; gesture.v = +h.dataset.v; return; }
@@ -227,21 +232,26 @@ vpEl.addEventListener('pointerdown', e => {
 vpEl.addEventListener('pointermove', e => {
   if (!doc) return;
   if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
-  if (gesture && gesture.kind === 'pinch' && pointers.size === 2) { const [a, b] = [...pointers.values()]; setZoom(gesture.z * Math.hypot(a.x - b.x, a.y - b.y) / gesture.d, (a.x + b.x) / 2, (a.y + b.y) / 2); return; }
+  if (gesture && gesture.kind === 'pinch' && pointers.size === 2) { const [a, b] = [...pointers.values()]; const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2; setZoom(gesture.z * Math.hypot(a.x - b.x, a.y - b.y) / gesture.d, mx, my); vpEl.scrollLeft -= mx - gesture.mx; vpEl.scrollTop -= my - gesture.my; gesture.mx = mx; gesture.my = my; return; }
   const p = pagePt(e);
   if (gesture) {
     const mv = Math.hypot(e.clientX - gesture.sx, e.clientY - gesture.sy) > 5; if (mv) gesture.moved = true;
     if (gesture.kind === 'pan' || (gesture.kind === 'maybe' && gesture.moved && e.pointerType === 'touch')) { gesture.kind = 'pan'; vpEl.scrollLeft = gesture.sl - (e.clientX - gesture.sx); vpEl.scrollTop = gesture.st - (e.clientY - gesture.sy); return; }
+    if (gesture.kind === 'place') { hover = placeSnap(p, e); draw(); showLoupe(hover, e); return; }
+    if (gesture.kind === 'dpt') { draft.pts[gesture.v] = [p[0] + gesture.off[0], p[1] + gesture.off[1]]; draw(); showLoupe(draft.pts[gesture.v], e); return; }
     if (gesture.kind === 'vertex') { const it = selItem(); let q = p; const prev = it.pts[gesture.v - 1] || it.pts[gesture.v + 1]; if (e.shiftKey) q = snapOrtho(prev, q); it.pts[gesture.v] = q; draw(); return; }
     if (gesture.kind === 'move' && gesture.moved) { const it = selItem(); const dx = p[0] - gesture.p[0], dy = p[1] - gesture.p[1]; it.pts = gesture.orig.map(q => [q[0] + dx, q[1] + dy]); draw(); return; }
   }
   if (draft) { const prev = draft.pts[draft.pts.length - 1]; hover = (e.shiftKey || shiftDown) ? snapOrtho(prev, p) : p; draw(); }
+  if (PLACE.includes(tool) && !(draft && draft.type === 'calibrate' && draft.pts.length === 2)) showLoupe(placeSnap(p, e), e); else if (!gesture) hideLoupe();
 });
 function endPointer(e) {
   pointers.delete(e.pointerId);
   if (!gesture) return; const g = gesture;
   if (g.kind === 'pinch') { if (pointers.size === 0) gesture = null; return; }
   gesture = null;
+  if (g.kind === 'place') { hideLoupe(); hover = null; if (e.type === 'pointerup') clickAt(pagePt(e), e); else draw(); return; }
+  if (g.kind === 'dpt') { if (e.pointerType !== 'mouse') hideLoupe(); draw(); return; }
   if (g.kind === 'vertex' || g.kind === 'move') { changed(); return; }
   if (g.kind === 'pan') { if (g.desel && !g.moved) { selId = null; draw(); } return; }
   if (g.kind === 'maybe' && !g.moved && e.type === 'pointerup') clickAt(pagePt(e), e);
@@ -252,7 +262,10 @@ vpEl.addEventListener('dblclick', e => { if (draft && (draft.type === 'poly' || 
 document.addEventListener('keydown', e => {
   if (e.key === 'Shift') shiftDown = true;
   if (e.target.matches('input,textarea,select')) return;
-  if (e.key === 'Enter') finishDraft();
+  if (e.key.startsWith('Arrow') && draft && draft.pts.length) { e.preventDefault(); const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key]; nudge(d[0], d[1]); return; }
+  if (e.key.toLowerCase() === 'm' && !e.ctrlKey && !e.metaKey) { toggleLoupe(); return; }
+  if (e.key === 'Tab' && draft && draft.pts.length > 1) { e.preventDefault(); calSel = (calSel + 1) % draft.pts.length; draw(); return; }
+  if (e.key === 'Enter') { e.preventDefault(); finishDraft(); }
   else if (e.key === 'Escape') { draft = null; hover = null; selId = null; draw(); }
   else if (e.key === 'Delete' || (e.key === 'Backspace' && !draft)) deleteSel();
   else if (e.key === 'Backspace' && draft) { draft.pts.pop(); if (!draft.pts.length) draft = null; draw(); }
@@ -269,8 +282,9 @@ $('#scaleDlg').addEventListener('close', () => { if ($('#scaleDlg').returnValue 
   let m = s.mPerPt; if (doc.type === 'image') m = s.ratio * Units.IN / (+$('#imgDpi').value || 150); applyScale(m, s.name, $('#allPages').checked); });
 function openCalibrate() { $('#calVal').value = ''; $('#calDlg').showModal(); }
 $('#calDlg').addEventListener('close', () => {
-  const pts = draft && draft.pts; draft = null; hover = null;
+  const pts = draft && draft.pts;
   if ($('#calDlg').returnValue === 'ok' && pts && pts.length === 2) {
+    draft = null; hover = null;
     const real = Units.parseLength($('#calVal').value, proj.units);
     if (!(real > 0)) { toast('Could not read that length. Try again.'); draw(); return; }
     applyScale(real / dist(pts[0], pts[1]), 'calibrated ' + Units.fmtLen(real, proj.units), $('#calAll').checked);
@@ -348,7 +362,7 @@ $('#projList').addEventListener('click', async e => { const o = e.target.dataset
 setTool('select'); $('#hint').textContent = 'Open a PDF or image plan to start. Your work is saved automatically in this browser.';
 (async () => { const last = localStorage.getItem('pm-last'); if (last) try { await openProject(last); } catch (e) { } })();
 // test hook
-window.PM = { get proj() { return proj; }, get doc() { return doc; }, measure, buildCSV, buildPDF, setTool, gotoPage, applyScale, get zoom() { return zoom; } };
+window.PM = { get draft() { return draft; }, get proj() { return proj; }, get doc() { return doc; }, measure, buildCSV, buildPDF, setTool, gotoPage, applyScale, get zoom() { return zoom; } };
 $('#calVal').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#calDlg').close('ok'); } });
 // ---- icons (inline SVG, no external assets) ----
 const ICONS = {
@@ -357,7 +371,7 @@ const ICONS = {
  fit:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>', ruler:'<path d="M3 16L16 3l5 5L8 21z"/><path d="M7 12l2 2M10 9l2 2M13 6l2 2"/>',
  table:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M3 15h18M9 4v16"/>', download:'<path d="M12 3v12M7 10l5 5 5-5M4 20h16"/>',
  panel:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M15 4v16"/>', close:'<path d="M6 6l12 12M18 6L6 18"/>',
- select:'<path d="M5 3l14 8-6 2-2 6z"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
+ select:'<path d="M5 3l14 8-6 2-2 6z"/>', loupe:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>', up:'<path d="M5 15l7-7 7 7"/>', down:'<path d="M5 9l7 7 7-7"/>', more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
  cal:'<path d="M4 20L20 4"/><circle cx="4" cy="20" r="2"/><circle cx="20" cy="4" r="2"/><path d="M9 9l-2-2M15 15l2 2"/>', line:'<path d="M4 18L20 6"/><path d="M4 14v8M20 2v8"/>',
  poly:'<path d="M3 19h6V9h6v6h6"/><circle cx="3" cy="19" r="1.5"/><circle cx="21" cy="15" r="1.5"/>', area:'<path d="M4 6l12-2 4 10-8 6-8-4z" fill="currentColor" fill-opacity=".25"/>',
  count:'<circle cx="7" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="12" cy="17" r="3"/>', text:'<path d="M5 5h14M12 5v14M9 19h6"/>'
@@ -402,3 +416,65 @@ function updateSheet() { if (!proj) return; const g = groups(); $('#units2').val
   $('.chev').textContent = document.body.classList.contains('sheetopen') ? 'Hide' : 'Show'; }
 document.addEventListener('gesturestart', e => e.preventDefault());
 placeDrawControls(); layout();
+// ---- magnifier loupe + nudge ----
+ICONS.loupe = '<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>';
+ICONS.up = '<path d="M5 15l7-7 7 7"/>'; ICONS.down = '<path d="M5 9l7 7 7-7"/>';
+document.querySelectorAll('#loupeBtn,.nud').forEach(b => { if (b.querySelector('svg')) return; const txt = b.textContent.trim(); b.textContent = ''; b.insertAdjacentHTML('afterbegin', `<svg class="ic" viewBox="0 0 24 24">${ICONS[b.dataset.icon]}</svg>` + (txt ? `<span class="t">${txt}</span>` : '')); });
+const PLACE = ['calibrate', 'line', 'poly', 'area'];
+let calSel = 0, loupeOn = localStorage.getItem('pm-loupe') !== '0', loupeTask = null, loupeBusy = false, loupeWant = null;
+const LSZ = 140, lc = $('#loupe');
+function placeSnap(p, e) { if (!draft || !draft.pts.length || !(e.shiftKey || shiftDown)) return p; return snapOrtho(draft.pts[draft.pts.length - 1], p); }
+function toggleLoupe() { loupeOn = !loupeOn; localStorage.setItem('pm-loupe', loupeOn ? '1' : '0'); $('#loupeBtn').classList.toggle('on', loupeOn); if (!loupeOn) hideLoupe(); toast('Magnifier ' + (loupeOn ? 'on' : 'off')); }
+$('#loupeBtn').classList.toggle('on', loupeOn); $('#loupeBtn').onclick = toggleLoupe;
+function hideLoupe() { lc.style.display = 'none'; loupeWant = null; }
+function showLoupe(p, e) {
+  if (!loupeOn || !doc || !p) return hideLoupe();
+  const dpr = window.devicePixelRatio || 1, L = Math.round(LSZ * dpr);
+  if (lc.width !== L) { lc.width = L; lc.height = L; }
+  const touch = e.pointerType && e.pointerType !== 'mouse';
+  let x = touch ? e.clientX - LSZ / 2 : e.clientX + 24, y = touch ? e.clientY - LSZ - 60 : e.clientY - LSZ - 24;
+  if (y < 4) y = touch ? e.clientY + 60 : e.clientY + 24; x = Math.max(4, Math.min(innerWidth - LSZ - 4, x));
+  if (!touch && x < e.clientX && x + LSZ > e.clientX && y < e.clientY && y + LSZ > e.clientY) x = e.clientX - LSZ - 24;
+  lc.style.left = x + 'px'; lc.style.top = y + 'px'; lc.style.display = 'block';
+  const mag = +$('#loupeMag').value, S = zoom * mag * dpr; // device px per page unit inside loupe
+  const ctx = lc.getContext('2d');
+  // instant preview from the main canvas
+  const k = canvas.width / doc.sizes[page].w, half = L / 2 / S;
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, L, L);
+  if (canvas.width) ctx.drawImage(canvas, (p[0] - half) * k, (p[1] - half) * k, 2 * half * k, 2 * half * k, 0, 0, L, L);
+  loupeOverlay(ctx, p, S, L);
+  loupeWant = { p: p.slice(), S, L, pg: page }; sharpLoupe();
+}
+async function sharpLoupe() {
+  if (loupeBusy || !loupeWant) return; const w = loupeWant; loupeBusy = true;
+  try {
+    const off = document.createElement('canvas'); off.width = w.L; off.height = w.L; const oc = off.getContext('2d'); oc.fillStyle = '#fff'; oc.fillRect(0, 0, w.L, w.L);
+    if (doc.type === 'pdf') { const pg = await doc.pdf.getPage(w.pg); const vp = pg.getViewport({ scale: w.S, offsetX: -(w.p[0] * w.S - w.L / 2), offsetY: -(w.p[1] * w.S - w.L / 2) });
+      await pg.render({ canvasContext: oc, viewport: vp }).promise; }
+    else { const h = w.L / 2 / w.S; oc.imageSmoothingEnabled = false; oc.drawImage(doc.img, w.p[0] - h, w.p[1] - h, 2 * h, 2 * h, 0, 0, w.L, w.L); }
+    if (loupeWant && lc.style.display !== 'none' && loupeWant.pg === w.pg) { const cur = loupeWant, ctx = lc.getContext('2d');
+      if (cur.p[0] === w.p[0] && cur.p[1] === w.p[1] && cur.S === w.S) { ctx.drawImage(off, 0, 0); loupeOverlay(ctx, w.p, w.S, w.L); lc.dataset.sharp = '1'; } }
+  } catch (err) { }
+  loupeBusy = false; if (loupeWant && (loupeWant.p[0] !== w.p[0] || loupeWant.p[1] !== w.p[1] || loupeWant.S !== w.S)) { lc.dataset.sharp = ''; setTimeout(sharpLoupe, 30); }
+}
+function loupeOverlay(ctx, p, S, L) {
+  const T = q => [(q[0] - p[0]) * S + L / 2, (q[1] - p[1]) * S + L / 2], dpr = window.devicePixelRatio || 1;
+  if (draft && draft.pts.length) { ctx.strokeStyle = draft.color; ctx.lineWidth = 1.5 * dpr; ctx.beginPath(); draft.pts.forEach((q, i) => { const [x, y] = T(q); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); if (!(draft.type === 'calibrate' && draft.pts.length === 2) && hover) { const [x, y] = T(hover); ctx.lineTo(x, y); } ctx.stroke();
+    draft.pts.forEach((q, i) => { const [x, y] = T(q); ctx.beginPath(); ctx.arc(x, y, (i === calSel ? 5 : 3) * dpr, 0, 7); ctx.strokeStyle = i === calSel ? '#ffb300' : draft.color; ctx.stroke(); }); }
+  ctx.strokeStyle = '#e53935'; ctx.lineWidth = 1 * dpr; const c = L / 2, g = 6 * dpr; ctx.beginPath();
+  ctx.moveTo(0, c); ctx.lineTo(c - g, c); ctx.moveTo(c + g, c); ctx.lineTo(L, c); ctx.moveTo(c, 0); ctx.lineTo(c, c - g); ctx.moveTo(c, c + g); ctx.lineTo(c, L); ctx.stroke();
+  ctx.fillStyle = '#e53935'; ctx.fillRect(c - dpr / 2, c - dpr / 2, dpr, dpr);
+  ctx.fillStyle = '#263238cc'; ctx.fillRect(L / 2 - 16 * dpr, L - 18 * dpr, 32 * dpr, 14 * dpr); ctx.fillStyle = '#fff'; ctx.font = `${10 * dpr}px sans-serif`; ctx.textAlign = 'center'; ctx.fillText($('#loupeMag').value + 'x', L / 2, L - 7 * dpr);
+}
+function nudge(dx, dy) { if (!draft || !draft.pts.length) return; const i = Math.min(calSel, draft.pts.length - 1), q = draft.pts[i]; draft.pts[i] = [q[0] + dx / zoom, q[1] + dy / zoom]; draw();
+  const r = svg.getBoundingClientRect(); showLoupe(draft.pts[i], { clientX: r.left + draft.pts[i][0] * zoom, clientY: r.top + draft.pts[i][1] * zoom, pointerType: phoneMQ.matches ? 'touch' : 'mouse' }); clearTimeout(nudge.t); nudge.t = setTimeout(hideLoupe, 1500); }
+document.querySelectorAll('.nud').forEach(b => b.onclick = () => { const [x, y] = b.dataset.n.split(',').map(Number); nudge(x, y); });
+$('#ptSel').onclick = () => { if (draft && draft.pts.length > 1) { calSel = (calSel + 1) % draft.pts.length; draw(); } };
+$('#calSetBtn').onclick = () => finishDraft();
+$('#loupeMag').addEventListener('change', () => { if (loupeWant) { const r = svg.getBoundingClientRect(); } });
+vpEl.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !gesture) hideLoupe(); });
+const _udb = updateDrawBar; updateDrawBar = function () { _udb(); const adj = !!draft && draft.pts.length > 0 && PLACE.includes(tool);
+  document.body.classList.toggle('adj', adj); document.body.classList.toggle('caladj', !!draft && draft.type === 'calibrate' && draft.pts.length === 2);
+  document.body.classList.toggle('placing', PLACE.includes(tool)); $('#ptSel').textContent = 'Point ' + (Math.min(calSel, draft ? draft.pts.length - 1 : 0) + 1); };
+const _setTool = setTool; setTool = function (t) { hideLoupe(); _setTool(t); };
+document.querySelectorAll('.tool').forEach(b => b.onclick = () => setTool(b.dataset.tool));
