@@ -25,6 +25,7 @@ Everything runs on your device. Files are opened locally in the browser and proj
 **Plans**
 - Open PDF (multi-page), PNG/JPG, DXF and DWG files entirely client-side; also renders Revit-style exports (geometry inside link blocks, mirrored families, HATCH outlines) and fits the view to the main drawing, ignoring stray far-away entities
 - Zoom, pan, pinch-zoom and two-finger pan; fit to page; page navigation
+- Units default to millimetres (lengths in mm, areas in m²); switch to metres or feet-inches with the Units selector. Each project keeps its own unit, and CAD files open in the drawing's units (mm/metric drawings in mm, feet/inch drawings in feet-inches)
 - CAD layer list with on/off toggles; true scale read from the drawing units (`$INSUNITS`), with a manual override for unitless drawings
 
 **Scale**

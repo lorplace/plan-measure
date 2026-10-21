@@ -17,7 +17,7 @@
   <span class="sep"></span>
   <span id="scaleInfo" class="scale" role="button" title="Set scale">Scale: not set</span>
   <button id="scaleBtn" class="btn" data-icon="ruler">Set scale</button>
-  <select id="units" title="Units"><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select>
+  <select id="units" title="Units"><option value="mm" selected>Millimetres (mm)</option><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select>
   <span class="sep"></span>
   <span class="grow"></span><button id="csvBtn" class="btn" data-icon="table">Export CSV</button>
   <button id="slvCountBtn" class="btn" data-icon="count" title="Sleeve count: totals by size and layer">Sleeve count</button>
@@ -56,7 +56,7 @@
   <button class="btn" data-icon="save" data-proxy="#saveBtn">Save</button>
   <button class="btn" data-icon="folder" data-proxy="#projBtn">Projects</button>
   <button class="btn" data-icon="save" id="pmprojBtn">Save project file</button>
-  <label class="mrow">Units <select id="units2"><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select></label>
+  <label class="mrow">Units <select id="units2"><option value="mm" selected>Millimetres (mm)</option><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select></label>
   <button class="btn" data-icon="table" data-proxy="#csvBtn">Export CSV</button>
   <button class="btn" data-icon="find" data-proxy="#findBtn">Find sleeves</button>
   <button class="btn" data-icon="sleeve" data-proxy="#sleeveCsvBtn">Sleeves CSV</button>
@@ -81,7 +81,7 @@
       <label>Colour <input id="eColor" type="color"></label>
       <label id="eSizeRow" hidden>Size <select id="eSize"><option>1/2"</option><option>3/4"</option><option>1"</option><option>1-1/2"</option><option>2"</option><option>3"</option><option>4"</option><option>6"</option><option>8"</option><option>10"</option><option>12"</option></select></label>
       <label id="eTextRow">Text <textarea id="eText" rows="2"></textarea></label>
-      <label id="eDropRow">Add to length (drops/fittings) <input id="eExtra" type="text" placeholder="e.g. 6' or 2m"></label>
+      <label id="eDropRow">Add to length (drops/fittings) <input id="eExtra" type="text" placeholder="e.g. 600 or 2m"></label>
       <button id="eDel" class="btn danger">Delete</button>
     </div>
   </aside>
@@ -96,14 +96,14 @@
   <p>Choose a standard scale, or use the Calibrate tool to click two points of a known distance.</p>
   <select id="stdScale"></select>
   <p id="imgDpiRow" hidden>Image resolution (DPI) <input id="imgDpi" type="number" value="150" style="width:6em"></p>
-  <p id="cadUnitRow" hidden>Drawing units <select id="cadUnit"><option value="1">Inches</option><option value="2">Feet</option><option value="4">Millimetres</option><option value="5">Centimetres</option><option value="6">Metres</option></select></p>
+  <p id="cadUnitRow" hidden>Drawing units <select id="cadUnit"><option value="1">Inches</option><option value="2">Feet</option><option value="4" selected>Millimetres</option><option value="5">Centimetres</option><option value="6">Metres</option></select></p>
   <label><input type="checkbox" id="allPages"> Apply to all pages</label>
   <menu><button value="cancel" class="btn">Cancel</button><button id="stdOk" value="ok" class="btn primary">Apply</button></menu>
 </form></dialog>
 <dialog id="calDlg"><form method="dialog">
   <h3>Known distance</h3>
   <p>Enter the real length between the two points. Examples: 12'6", 12' 6 1/2", 20ft, 3.5m, 3500mm</p>
-  <input id="calVal" type="text" autocomplete="off">
+  <input id="calVal" type="text" autocomplete="off" placeholder="e.g. 3500 (mm), 3.5m or 12'6&quot;">
   <label><input type="checkbox" id="calAll"> Apply to all pages</label>
   <menu><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary">Apply</button></menu>
 </form></dialog>

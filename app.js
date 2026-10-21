@@ -47,7 +47,7 @@ async function onFile(e) { const f = e.target.files[0]; if (!f) return; e.target
     return toast(fileMime(f) === 'application/dwg' ? 'Could not read this DWG (' + err.message + '). Save it as DXF from your CAD program, or convert it free with ODA File Converter, then open the DXF.' : 'Could not open file: ' + err.message, 10000); }
   proj = { id: uid(), name: f.name.replace(/\.[^.]+$/, ''), fileName: f.name, fileType: doc.mime, units: $('#units').value, scales: {}, items: [], origins: {}, hidden: {} };
   let msg = 'Opened ' + f.name + '. Set the scale before measuring.';
-  if (doc.type === 'cad') { if (doc.cad.unitM) { proj.scales[1] = doc.cad.unitM / doc.cad.k; proj.scaleNames = { 1: 'CAD units: ' + doc.cad.unitName }; msg = 'Opened ' + f.name + ' (' + doc.cad.unitName + '). True scale set from the drawing.'; } else msg = 'Opened ' + f.name + '. Drawing has no units: choose them in Set scale.';  if (doc.cad.xrefs && doc.cad.xrefs.length) msg += ' Missing external references (not in this file): ' + doc.cad.xrefs.slice(0, 3).join(', ') + (doc.cad.xrefs.length > 3 ? ' and ' + (doc.cad.xrefs.length - 3) + ' more' : '') + '. Bind them in your CAD program to see them.'; }
+  if (doc.type === 'cad') { if (doc.cad.unitM) { proj.scales[1] = doc.cad.unitM / doc.cad.k; proj.scaleNames = { 1: 'CAD units: ' + doc.cad.unitName }; msg = 'Opened ' + f.name + ' (' + doc.cad.unitName + '). True scale set from the drawing.'; { const cu = [1, 2, 10].includes(doc.cad.units) ? 'imp' : 'mm'; proj.units = cu; $('#units').value = cu; } } else msg = 'Opened ' + f.name + '. Drawing has no units: choose them in Set scale.';  if (doc.cad.xrefs && doc.cad.xrefs.length) msg += ' Missing external references (not in this file): ' + doc.cad.xrefs.slice(0, 3).join(', ') + (doc.cad.xrefs.length > 3 ? ' and ' + (doc.cad.xrefs.length - 3) + ' more' : '') + '. Bind them in your CAD program to see them.'; }
   page = 1; resetHist(); fitPage(); renderLayers(); await persist(); toast(msg, 5000);
 }
 $('#file').addEventListener('change', onFile);
@@ -328,7 +328,7 @@ $('#units').addEventListener('change', e => { if (proj) { proj.units = e.target.
 // ---------- CSV export ----------
 function csvCell(v) { v = String(v ?? ''); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
 function buildCSV() {
-  const u = proj.units, lu = u === 'met' ? 'm' : 'ft', au = u === 'met' ? 'm2' : 'sq ft', lf = u === 'met' ? 1 : 1 / Units.FT, af = lf * lf;
+  const u = proj.units, lu = u === 'mm' ? 'mm' : Units.isMet(u) ? 'm' : 'ft', au = Units.isMet(u) ? 'm2' : 'sq ft', lf = u === 'mm' ? 1000 : Units.isMet(u) ? 1 : 1 / Units.FT, af = Units.isMet(u) ? 1 : lf * lf;
   const rows = [['Project', proj.name], [], ['Page', 'Type', 'Label', 'Colour', 'Quantity', 'Unit', 'Display', 'Added length', 'Note']];
   proj.items.forEach(it => { const v = measure(it); let q = '', un = '';
     if (it.type === 'line' || it.type === 'poly') { q = isFinite(v) ? (v * lf).toFixed(3) : ''; un = lu; }
@@ -714,7 +714,7 @@ const _renderList = renderList; renderList = function () { _renderList(); const 
 $('#eSize').addEventListener('change', e => { const it = selItem(); if (it) { it.size = e.target.value; changed(); } });
 // sleeve schedule CSV
 function buildSleeveCSV() {
-  const u = proj.units, f = v => v == null ? '' : Units.fmtLen(v, u), dec = v => v == null ? '' : (u === 'met' ? v : v / Units.FT).toFixed(4), lu = u === 'met' ? 'm' : 'ft';
+  const u = proj.units, f = v => v == null ? '' : Units.fmtLen(v, u), dec = v => v == null ? '' : u === 'mm' ? (v * 1000).toFixed(1) : (Units.isMet(u) ? v : v / Units.FT).toFixed(4), lu = u === 'mm' ? 'mm' : Units.isMet(u) ? 'm' : 'ft';
   const rows = [['Sleeve schedule', proj.name], ['Origin', Object.keys(proj.origins || {}).length ? 'set (Y up)' : 'not set'], [],
     ['ID', 'Size', 'Label', 'X from origin', 'Y from origin', `X (${lu})`, `Y (${lu})`, 'Offset to nearest vertical line', 'Offset to nearest horizontal line', `Offset X (${lu})`, `Offset Y (${lu})`, 'Ref X layer', 'Ref Y layer', 'Level / page', 'Note', 'Top of slab', 'Slab thickness', 'Top of sleeve', 'Bottom of sleeve', 'Sleeve length', 'Height from']];
   proj.items.filter(i => i.type === 'sleeve').forEach(it => { const i = sleeveInfo(it);
@@ -735,10 +735,10 @@ function parseSize(s) { // returns size label or null
   if ((m = s.match(/(?:^|[^\d\/.])(\d+)[- ](\d)\/(\d)\s*(?:"|''|in\b|po\b)/i))) return m[1] + '-' + m[2] + '/' + m[3] + '"';
   if ((m = s.match(/(?:^|[^\d\/.])(\d)\/(\d)\s*(?:"|''|in\b|po\b)/i))) return m[1] + '/' + m[2] + '"';
   if ((m = s.match(/(?:^|[^\d\/.])(\d+(?:\.\d+)?)\s*(?:"|''|in\b|inch|po\b)/i))) return m[1] + '"';
-  if ((m = s.match(/[ØøΦ⌀]\s*(\d+(?:\.\d+)?)/))) return m[1] + (proj && proj.units === 'met' ? 'mm' : '"');
+  if ((m = s.match(/[ØøΦ⌀]\s*(\d+(?:\.\d+)?)/))) return m[1] + (proj && Units.isMet(proj.units) ? 'mm' : '"');
   return null; }
 function sizeFromDia(rPage) { const s = scaleOf(page); if (!s || !rPage) return { size: '', raw: '' }; const dm = 2 * rPage * s, din = dm / Units.IN;
-  const raw = proj.units === 'met' ? 'Ø ' + (dm * 1000).toFixed(0) + ' mm' : 'Ø ' + din.toFixed(2) + '"'; let best = NOMINAL_IN[0]; for (const n of NOMINAL_IN) if (Math.abs(n - din) < Math.abs(best - din)) best = n; return { size: inStr(best), raw }; }
+  const raw = Units.isMet(proj.units) ? 'Ø ' + (dm * 1000).toFixed(0) + ' mm' : 'Ø ' + din.toFixed(2) + '"'; let best = NOMINAL_IN[0]; for (const n of NOMINAL_IN) if (Math.abs(n - din) < Math.abs(best - din)) best = n; return { size: inStr(best), raw }; }
 function nearText(x, y, R) { let best = null, bd = R; for (const t of doc.cad.texts) { if ((proj.hidden || {})[doc.cad.layerNames[t.L]]) continue; const d = Math.hypot(t.x - x, t.y - y); if (d <= bd) { const sz = parseSize(t.text); if (sz) { bd = d; best = sz; } } } return best; }
 // size written in a block name, e.g. "SLV_Round_FLR_4", "Sleeve 3in", "PEN-100mm" (only for unscaled inserts)
 function sizeFromName(n) { n = String(n || ''); const p = parseSize(n); if (p) return p; const t = n.split(/[^0-9.\/-]+/).filter(Boolean).pop(); if (!t || !/^\d+(?:\.\d+)?$/.test(t)) return null; const v = +t; return NOMINAL_IN.includes(v) && /[_\s-]\d+(?:\.\d+)?[_\s-]*$/.test(n) ? inStr(v) : null; }
@@ -836,11 +836,11 @@ Object.assign(window.PM, { sleeveCounts });
 
 // ---- Sleeve heights: slab zones, level default, per-sleeve override, elevations read from text near the sleeve ----
 // all values in metres; nothing is computed at load time (only when a sleeve is drawn, listed or exported)
-const fmtEl = v => v == null || !isFinite(v) ? '' : proj.units === 'met' ? v.toFixed(3) + ' m' : Units.fmtLen(v, 'imp');
-const fmtThk = v => v == null || !isFinite(v) ? '' : proj.units === 'met' ? Math.round(v * 1000) + ' mm' : Units.fmtLen(v, 'imp');
+const fmtEl = v => v == null || !isFinite(v) ? '' : Units.isMet(proj.units) ? v.toFixed(3) + ' m' : Units.fmtLen(v, 'imp');
+const fmtThk = v => v == null || !isFinite(v) ? '' : Units.isMet(proj.units) ? Math.round(v * 1000) + ' mm' : Units.fmtLen(v, 'imp');
 function parseEl(s) { s = String(s == null ? '' : s).trim(); if (!s) return null; if (/^-?\d{1,3},\d{3}$/.test(s)) s = s.replace(',', '.'); // 64,800 = 64.800 m (geodetic, comma style)
-  const neg = s.startsWith('-'); const v = Units.parseLength(neg ? s.slice(1) : s, proj.units); return isFinite(v) ? (neg ? -v : v) : NaN; }
-function parseThk(s) { s = String(s == null ? '' : s).trim(); if (!s) return null; if (proj.units === 'met' && /^\d+(\.\d+)?$/.test(s) && +s >= 20) s += 'mm'; const v = Units.parseLength(s, proj.units); return isFinite(v) ? v : NaN; }
+  const neg = s.startsWith('-'); const v = Units.parseLength(neg ? s.slice(1) : s, proj.units === 'mm' ? 'met' : proj.units); return isFinite(v) ? (neg ? -v : v) : NaN; }
+function parseThk(s) { s = String(s == null ? '' : s).trim(); if (!s) return null; if (Units.isMet(proj.units) && /^\d+(\.\d+)?$/.test(s) && +s >= 20) s += 'mm'; const v = Units.parseLength(s, proj.units); return isFinite(v) ? v : NaN; }
 function slabDefault(pg) { proj.slab = proj.slab || {}; return proj.slab[pg] || {}; }
 function inPoly(P, x, y) { let c = false; for (let i = 0, j = P.length - 1; i < P.length; j = i++) { const [xi, yi] = P[i], [xj, yj] = P[j]; if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c; } return c; }
 function zoneAt(pg, x, y) { let best = null, ba = Infinity; for (const z of proj.items) { if (z.type !== 'area' || !z.slab || z.page !== pg || z.pts.length < 3 || !inPoly(z.pts, x, y)) continue; const a = polyArea(z.pts); if (a < ba) { ba = a; best = z; } } return best; }
