@@ -130,18 +130,54 @@ function build(src) {
 async function parse(bytes, kind) {
   if (kind === 'dxf') { const text = new TextDecoder('utf-8').decode(bytes); const P = g.DxfParser.default || g.DxfParser; const d = new P().parseSync(text); const src = fromDxfParser(d); src.attribs = scanAttribs(text); { const h = d.header || {}, a = h.$EXTMIN, b = h.$EXTMAX; if (a && b) src.extHint = [a.x, a.y, b.x, b.y]; } return build(src); }
   const mod = await import('./lib/dwg/dist/libredwg-web.js'); const lib = await mod.LibreDwg.create(new URL('lib/dwg/wasm', location.href).href.replace(/\/$/, ''));
-  const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); const dwg = lib.dwg_read_data(ab, mod.Dwg_File_Type.DWG);
-  if (!dwg) throw new Error('Could not read this DWG'); const db = lib.convert(dwg); try { lib.dwg_free(dwg); } catch (e) { } return build(fromDwg(db));
+  // skip data we never use: Revit XDATA and block preview bitmaps made up about a third of the converter's memory peak
+  lib.dwg_object_entity_get_xdata = () => []; lib.dwg_entity_block_header_get_preview = () => null;
+  let ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); bytes = null; const dwg = lib.dwg_read_data(ab, mod.Dwg_File_Type.DWG); ab = null;
+  if (!dwg) throw new Error('Could not read this DWG'); let db = lib.convert(dwg); try { lib.dwg_free(dwg); } catch (e) { } const src = fromDwg(db); db = null; return build(src);
 }
+// compact form: typed arrays instead of millions of small JS arrays (keeps phone memory low; transferable from the worker)
+const PACK_V = 1;
+function pack(M) {
+  const n = M.segs.length, m = M.pts.length, sx = new Float64Array(n * 4), sL = new Uint16Array(n), sC = new Uint16Array(n), sK = new Uint8Array(n), colors = [], ci = {};
+  for (let i = 0; i < n; i++) { const s = M.segs[i]; sx[4 * i] = s[0]; sx[4 * i + 1] = s[1]; sx[4 * i + 2] = s[2]; sx[4 * i + 3] = s[3]; sK[i] = s[4] ? 1 : 0; sL[i] = s[5]; let c = ci[s[6]]; if (c == null) { c = ci[s[6]] = colors.length; colors.push(s[6]); } sC[i] = c; }
+  const KIND = { end: 0, mid: 1, center: 2 }, px = new Float64Array(m * 2), pK = new Uint8Array(m), pL = new Uint16Array(m);
+  for (let i = 0; i < m; i++) { const p = M.pts[i]; px[2 * i] = p[0]; px[2 * i + 1] = p[1]; pK[i] = KIND[p[2]] || 0; pL[i] = p[3]; }
+  const { segs, pts, toWorld, ...rest } = M; return Object.assign(rest, { v: PACK_V, packed: true, nSegs: n, nPts: m, sx, sL, sC, sK, colors, px, pK, pL }); }
+function revive(P) { if (!P || P.v !== PACK_V) throw new Error('Saved drawing data is from an older version. Open the file again.'); const k = P.k, ox = P.ox, oy = P.oy; P.toWorld = (x, y) => [x / k + ox, oy - y / k]; return P; }
+const transfers = P => [P.sx.buffer, P.sL.buffer, P.sC.buffer, P.sK.buffer, P.px.buffer, P.pK.buffer, P.pL.buffer];
+// parse in a Web Worker: the DWG converter (WebAssembly) and its object tree live only in the worker, which is terminated afterwards so all of it is freed
+function parseInWorker(bytes, kind) {
+  return new Promise((res, rej) => { let w; try { w = new Worker(new URL('cadworker.js', location.href).href); } catch (e) { return parse(bytes, kind).then(M => res(revive(pack(M))), rej); }
+    const done = () => { try { w.terminate(); } catch (e) { } };
+    w.onmessage = e => { done(); if (e.data && e.data.ok) res(revive(e.data.P)); else rej(new Error((e.data && e.data.error) || 'Could not read the drawing')); };
+    w.onerror = e => { done(); rej(new Error(e.message || 'The drawing could not be read (not enough memory?)')); };
+    const copy = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); w.postMessage({ bytes: copy, kind }, [copy]); }); }
 // draw model onto a 2D context; page point (x,y) -> (x*S+ox, y*S+oy)
-function draw(ctx, M, S, ox, oy, hidden) {
+// Tiled, level-of-detail drawing: segments are bucketed into a 16x16 grid of tiles (Path2D per colour per tile, built lazily);
+// only tiles that touch the region are stroked, and segments shorter than ~0.4 device px are skipped at low zoom.
+const TN = 16;
+function tileIndex(M) { if (M._tiles) return M._tiles; const tw = M.w / TN, th = M.h / TN, lists = Array.from({ length: TN * TN }, () => []), sx = M.sx;
+  for (let i = 0; i < M.nSegs; i++) { const x1 = sx[4 * i], y1 = sx[4 * i + 1], x2 = sx[4 * i + 2], y2 = sx[4 * i + 3];
+    const c0 = Math.max(0, Math.min(TN - 1, Math.floor(Math.min(x1, x2) / tw))), c1 = Math.max(0, Math.min(TN - 1, Math.floor(Math.max(x1, x2) / tw))), r0 = Math.max(0, Math.min(TN - 1, Math.floor(Math.min(y1, y2) / th))), r1 = Math.max(0, Math.min(TN - 1, Math.floor(Math.max(y1, y2) / th)));
+    if ((c1 - c0 + 1) * (r1 - r0 + 1) > 16) { lists[r0 * TN + c0].push(i); continue; } // very long line: keep once, tiles below are only a culling hint
+    for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) lists[r * TN + c].push(i); }
+  const big = []; for (let i = 0; i < M.nSegs; i++) { const dx = sx[4 * i + 2] - sx[4 * i], dy = sx[4 * i + 3] - sx[4 * i + 1]; if (Math.abs(dx) > 4 * tw || Math.abs(dy) > 4 * th) big.push(i); }
+  return (M._tiles = { tw, th, ids: lists.map(l => Uint32Array.from(l)), big: Uint32Array.from(big) }); }
+function draw(ctx, M, S, ox, oy, hidden, reg) {
   ctx.save(); ctx.setTransform(S, 0, 0, S, ox, oy); ctx.lineWidth = Math.max(1, S * 0.6) / S; ctx.lineCap = 'round';
-  if (!M._paths || M._hidKey !== JSON.stringify(hidden)) { M._hidKey = JSON.stringify(hidden); const by = {};
-    for (const s of M.segs) { if (hidden[M.layerNames[s[5]]]) continue; const p = by[s[6]] || (by[s[6]] = new Path2D()); p.moveTo(s[0], s[1]); p.lineTo(s[2], s[3]); } M._paths = by; }
-  for (const c in M._paths) { ctx.strokeStyle = c; ctx.stroke(M._paths[c]); }
-  for (const t of M.texts) { if (hidden[M.layerNames[t.L]] || !t.text || t.h * S < 2) continue; ctx.save(); ctx.translate(t.x, t.y); ctx.rotate(-t.rot); ctx.fillStyle = t.col; ctx.font = `${t.h}px sans-serif`; ctx.textBaseline = t.top ? 'top' : 'alphabetic';
+  reg = reg || { x0: 0, y0: 0, w: M.w, h: M.h };
+  const hk = JSON.stringify(hidden), lod = Math.max(-6, Math.min(4, Math.floor(Math.log2(S)))), minL = 0.4 / Math.pow(2, lod);
+  if (M._hidKey !== hk || M._lod !== lod) { M._hidKey = hk; M._lod = lod; M._tp = new Map(); M._hidL = M.layerNames.map(n => !!hidden[n]); }
+  const T = tileIndex(M), sx = M.sx, hidL = M._hidL, done = M._big || (M._big = new Uint8Array(M.nSegs));
+  const build = ids => { const by = {}; for (const i of ids) { if (hidL[M.sL[i]]) continue; const x1 = sx[4 * i], y1 = sx[4 * i + 1], x2 = sx[4 * i + 2], y2 = sx[4 * i + 3]; if (Math.abs(x2 - x1) + Math.abs(y2 - y1) < minL) continue; const c = M.colors[M.sC[i]], p = by[c] || (by[c] = new Path2D()); p.moveTo(x1, y1); p.lineTo(x2, y2); } return by; };
+  const c0 = Math.max(0, Math.floor(reg.x0 / T.tw)), c1 = Math.min(TN - 1, Math.floor((reg.x0 + reg.w) / T.tw)), r0 = Math.max(0, Math.floor(reg.y0 / T.th)), r1 = Math.min(TN - 1, Math.floor((reg.y0 + reg.h) / T.th));
+  const strokeAll = by => { for (const c in by) { ctx.strokeStyle = c; ctx.stroke(by[c]); } };
+  for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) { const k = r * TN + c; let by = M._tp.get(k); if (!by) { by = build(T.ids[k]); M._tp.set(k, by); } strokeAll(by); }
+  { let by = M._tp.get('big'); if (!by) { by = build(T.big); M._tp.set('big', by); } strokeAll(by); } void done;
+  for (const t of M.texts) { if (hidden[M.layerNames[t.L]] || !t.text || t.h * S < 2) continue; if (t.x < reg.x0 - t.h * 40 || t.x > reg.x0 + reg.w + t.h || t.y < reg.y0 - t.h * 20 || t.y > reg.y0 + reg.h + t.h * 40) continue;
+    ctx.save(); ctx.translate(t.x, t.y); ctx.rotate(-t.rot); ctx.fillStyle = t.col; ctx.font = `${t.h}px sans-serif`; ctx.textBaseline = t.top ? 'top' : 'alphabetic';
     t.text.split('\n').forEach((ln, i) => ctx.fillText(ln, 0, i * t.h * 1.4)); ctx.restore(); }
   ctx.restore();
 }
-g.CAD = { parse, draw, UNIT_M, UNIT_NAME, _fromDwg: fromDwg, _build: build };
+g.CAD = { parse, parseInWorker, pack, revive, transfers, draw, UNIT_M, UNIT_NAME, _fromDwg: fromDwg, _build: build };
 })(this);

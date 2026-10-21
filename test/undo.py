@@ -30,7 +30,7 @@ with sync_playwright() as p:
     chk('undo disabled when empty', pg.is_disabled('#undoBtn'))
     pg.keyboard.press('Control+Shift+Z'); chk('redo scale', bool(pg.evaluate('PM.proj.scales[1]')))
     pg.keyboard.press('Control+y'); pg.click('#redoBtn'); chk('redo adds', n()==2)
-    pg.wait_for_timeout(1200); pg.reload(); pg.wait_for_function('window.PM.proj && PM.proj.items.length>0')
+    pg.wait_for_timeout(1200); pg.reload(); pg.click('#resumeBtn'); pg.wait_for_function('window.PM.proj && PM.proj.items.length>0')
     chk('autosave kept post-redo state', n()==2 and bool(pg.evaluate('PM.proj.scales[1]')))
     chk('no errors '+str(errs), not errs); pg.close()
     ctx=b.new_context(viewport={'width':390,'height':844},device_scale_factor=3,is_mobile=True,has_touch=True); pg=ctx.new_page(); pg.goto(URL)

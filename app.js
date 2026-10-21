@@ -38,6 +38,8 @@ function snapOrtho(prev, p) { if (!prev) return p; const dx = Math.abs(p[0] - pr
 // ---------- loading ----------
 function fileMime(f) { const n = f.name.toLowerCase(); if (n.endsWith('.dxf')) return 'application/dxf'; if (n.endsWith('.dwg')) return 'application/dwg'; return f.type || (n.endsWith('.pdf') ? 'application/pdf' : 'image/png'); }
 async function onFile(e) { const f = e.target.files[0]; if (!f) return; e.target.value = '';
+  if (/\.pmproj$/i.test(f.name)) return openPmproj(f);
+  if (/\.dwg$/i.test(f.name) && isPhoneDev && f.size > 2e6 && !confirm('This DWG is large (' + (f.size / 1e6).toFixed(1) + ' MB). Reading DWG files needs a lot of memory and can close the browser tab on a phone.\n\nTip: open it once on a computer, then More > Save project file, and open that .pmproj file on the phone.\n\nTry anyway?')) return;
   const bytes = new Uint8Array(await f.arrayBuffer());
   if (fileMime(f) === 'application/dwg') toast('Reading DWG (first time loads a 10 MB converter)...', 8000); else toast('Opening...', 8000);
   await new Promise(r => setTimeout(r, 50)); // let the message paint before heavy parsing
@@ -58,7 +60,7 @@ async function loadDoc(bytes, mime, name) {
     doc.numPages = doc.pdf.numPages;
     for (let i = 1; i <= doc.numPages; i++) { const p = await doc.pdf.getPage(i); const vp = p.getViewport({ scale: 1 }); doc.vps[i] = vp; doc.sizes[i] = { w: vp.width, h: vp.height }; }
   } else if (mime === 'application/dxf' || mime === 'application/dwg') {
-    doc.type = 'cad'; doc.cad = await CAD.parse(bytes, mime === 'application/dxf' ? 'dxf' : 'dwg'); doc.numPages = 1; doc.sizes[1] = { w: doc.cad.w, h: doc.cad.h };
+    doc.type = 'cad'; doc.cad = bytes && bytes.cadPack ? CAD.revive(bytes.cadPack) : await CAD.parseInWorker(bytes, mime === 'application/dxf' ? 'dxf' : 'dwg'); doc.bytes = null; /* raw CAD bytes are not kept */ doc.numPages = 1; doc.sizes[1] = { w: doc.cad.w, h: doc.cad.h };
   } else {
     doc.type = 'image';
     const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
@@ -71,34 +73,44 @@ async function loadDoc(bytes, mime, name) {
 function layout() {
   document.body.classList.toggle('hasdoc', !!doc); if (!doc) return; const { w, h } = doc.sizes[page];
   stage.style.width = w * zoom + 'px'; stage.style.height = h * zoom + 'px';
-  canvas.style.width = w * zoom + 'px'; canvas.style.height = h * zoom + 'px';
+  placeCanvas();
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
   $('#zoomInfo').textContent = Math.round(zoom * 100) + '%';
   $('#pageInfo').textContent = page + ' / ' + doc.numPages;
   const s = scaleOf(page);
   $('#scaleInfo').textContent = 'Scale: ' + (s ? (proj.scaleNames && proj.scaleNames[page] || 'calibrated') : 'not set');
   $('#scaleInfo').style.color = s ? '#a5d6a7' : '#ffab91';
-  draw(); clearTimeout(renderTimer); renderTimer = setTimeout(renderCanvas, 120);
+  if (!layout.light) draw(); scheduleRender();
 }
+// Renders only the visible part of the page (plus a margin) at the current zoom: small canvas, sharp at any zoom.
+// During pinch / wheel / scroll the existing bitmap is only moved and scaled with CSS; the sharp render happens ~150 ms after the gesture ends.
+const isPhoneDev = matchMedia('(pointer:coarse)').matches || /iPhone|iPad|iPod/.test(navigator.userAgent);
+function visRegion() { const { w, h } = doc.sizes[page], vr = vpEl.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+  const vx0 = (vr.left - sr.left) / zoom, vy0 = (vr.top - sr.top) / zoom, vw = vr.width / zoom, vh = vr.height / zoom, m = 0.25;
+  const x0 = Math.max(0, vx0 - vw * m), y0 = Math.max(0, vy0 - vh * m), x1 = Math.min(w, vx0 + vw * (1 + m)), y1 = Math.min(h, vy0 + vh * (1 + m));
+  return x1 > x0 && y1 > y0 ? { x0, y0, w: x1 - x0, h: y1 - y0 } : { x0: 0, y0: 0, w, h }; }
+function placeCanvas() { const g = canvas._reg; if (!g) return; canvas.style.left = g.x0 * zoom + 'px'; canvas.style.top = g.y0 * zoom + 'px'; canvas.style.width = g.w * zoom + 'px'; canvas.style.height = g.h * zoom + 'px'; }
+let renderSeq = 0;
 async function renderCanvas() {
-  if (!doc) return; const { w, h } = doc.sizes[page];
-  let r = zoom * (window.devicePixelRatio || 1);
-  const maxPx = 16e6; if (w * h * r * r > maxPx) r = Math.sqrt(maxPx / (w * h));
-  const ctx = canvas.getContext('2d');
+  if (!doc || !doc.sizes[page]) return; const seq = ++renderSeq, reg = visRegion();
+  let r = zoom * (window.devicePixelRatio || 1); const maxPx = isPhoneDev ? 4e6 : 16e6; // iOS kills tabs that hold big canvases
+  if (reg.w * reg.h * r * r > maxPx) r = Math.sqrt(maxPx / (reg.w * reg.h));
+  const cw = Math.max(1, Math.floor(reg.w * r)), ch = Math.max(1, Math.floor(reg.h * r));
+  const off = document.createElement('canvas'); off.width = cw; off.height = ch; const octx = off.getContext('2d');
   if (doc.type === 'pdf') {
-    if (renderTask) { renderTask.cancel(); renderTask = null; }
+    if (renderTask) { try { renderTask.cancel(); } catch (e) { } renderTask = null; }
     const p = await doc.pdf.getPage(page); const vp = p.getViewport({ scale: r });
-    const off = document.createElement('canvas'); off.width = Math.floor(vp.width); off.height = Math.floor(vp.height);
-    renderTask = p.render({ canvasContext: off.getContext('2d'), viewport: vp });
-    try { await renderTask.promise; } catch (e) { return; }
-    renderTask = null; canvas.width = off.width; canvas.height = off.height; ctx.drawImage(off, 0, 0);
-  } else if (doc.type === 'cad') {
-    canvas.width = Math.floor(w * r); canvas.height = Math.floor(h * r); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height); CAD.draw(ctx, doc.cad, r, 0, 0, (proj && proj.hidden) || {});
-  } else {
-    canvas.width = Math.floor(w * r); canvas.height = Math.floor(h * r); ctx.drawImage(doc.img, 0, 0, canvas.width, canvas.height);
-  }
+    renderTask = p.render({ canvasContext: octx, viewport: vp, transform: [1, 0, 0, 1, -reg.x0 * r, -reg.y0 * r] });
+    try { await renderTask.promise; } catch (e) { return; } renderTask = null;
+  } else if (doc.type === 'cad') { octx.fillStyle = '#fff'; octx.fillRect(0, 0, cw, ch); CAD.draw(octx, doc.cad, r, -reg.x0 * r, -reg.y0 * r, (proj && proj.hidden) || {}, reg); }
+  else { octx.drawImage(doc.img, reg.x0, reg.y0, reg.w, reg.h, 0, 0, cw, ch); }
+  if (seq !== renderSeq) return; // a newer render started
+  canvas.width = cw; canvas.height = ch; canvas.getContext('2d').drawImage(off, 0, 0); off.width = off.height = 0;
+  canvas._reg = reg; canvas._r = r; placeCanvas();
   canvas.dataset.rendered = page + ':' + zoom;
 }
+let gestureUntil = 0; const gestureBusy = () => performance.now() < gestureUntil || (typeof pointers !== 'undefined' && pointers.size > 1);
+function scheduleRender(ms = 150) { clearTimeout(renderTimer); renderTimer = setTimeout(() => { if (gestureBusy()) return scheduleRender(ms); renderCanvas(); }, ms); }
 function el(tag, attrs, parent) { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
 function label(g, x, y, text, color) {
   const fs = 13 / zoom; const t = el('text', { x, y, 'font-size': fs, fill: color, 'font-weight': 700, 'text-anchor': 'middle', 'paint-order': 'stroke', stroke: '#fff', 'stroke-width': 3 / zoom, 'pointer-events': 'none' }, g); t.textContent = text; return t;
@@ -173,12 +185,12 @@ function setZoom(z, cx, cy) {
   if (!doc) return; z = Math.max(0.05, Math.min(20, z)); const r = vpEl.getBoundingClientRect();
   if (cx == null) { cx = r.left + r.width / 2; cy = r.top + r.height / 2; }
   const px = (vpEl.scrollLeft + cx - r.left - stage.offsetLeft) / zoom, py = (vpEl.scrollTop + cy - r.top - stage.offsetTop) / zoom;
-  zoom = z; layout();
+  zoom = z; layout.light = gestureBusy(); layout(); layout.light = false; if (gestureBusy()) { clearTimeout(setZoom.t); setZoom.t = setTimeout(() => draw(), 160); }
   vpEl.scrollLeft = px * zoom + stage.offsetLeft - (cx - r.left); vpEl.scrollTop = py * zoom + stage.offsetTop - (cy - r.top);
 }
 $('#prev').onclick = () => gotoPage(page - 1); $('#next').onclick = () => gotoPage(page + 1);
 $('#zoomIn').onclick = () => setZoom(zoom * 1.25); $('#zoomOut').onclick = () => setZoom(zoom / 1.25); $('#fit').onclick = fitPage;
-vpEl.addEventListener('wheel', e => { if (!doc) return; e.preventDefault(); setZoom(zoom * Math.pow(1.0015, -e.deltaY), e.clientX, e.clientY); }, { passive: false });
+vpEl.addEventListener('wheel', e => { if (!doc) return; e.preventDefault(); gestureUntil = performance.now() + 150; setZoom(zoom * Math.pow(1.0015, -e.deltaY), e.clientX, e.clientY); }, { passive: false });
 window.addEventListener('resize', () => doc && layout());
 
 // ---------- tools ----------
@@ -230,7 +242,7 @@ function clickAt(p, e) {
 // pointer handling: click / drag / pan / pinch
 const pointers = new Map(); let gesture = null;
 vpEl.addEventListener('pointerdown', e => {
-  if (!doc) return; vpEl.setPointerCapture(e.pointerId); pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!doc) return; try { vpEl.setPointerCapture(e.pointerId); } catch (err) { } pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 2) { const [a, b] = [...pointers.values()]; gesture = { kind: 'pinch', d: Math.hypot(a.x - b.x, a.y - b.y), z: zoom, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 }; hideLoupe(); return; }
   const p = pagePt(e);
   gesture = { kind: 'maybe', sx: e.clientX, sy: e.clientY, sl: vpEl.scrollLeft, st: vpEl.scrollTop, p, moved: false };
@@ -337,7 +349,7 @@ async function buildPDF() {
   if (doc.type === 'pdf') { out = await PDFDocument.load(doc.bytes.slice(), { ignoreEncryption: true }); conv = (pg, p) => doc.vps[pg].convertToPdfPoint(p[0], p[1]); }
   else if (doc.type === 'cad') {
     out = await PDFDocument.create(); const { w, h } = doc.sizes[1], M = doc.cad, hid = proj.hidden || {}, pg = out.addPage([w, h]); const f0 = await out.embedFont(StandardFonts.Helvetica);
-    for (const s of M.segs) if (!hid[M.layerNames[s[5]]]) pg.drawLine({ start: { x: s[0], y: h - s[1] }, end: { x: s[2], y: h - s[3] }, thickness: 0.4, color: hexRgb(s[6]) });
+    { const hidL = M.layerNames.map(n => !!hid[n]), cols = M.colors.map(hexRgb), sx = M.sx; for (let i = 0; i < M.nSegs; i++) if (!hidL[M.sL[i]]) pg.drawLine({ start: { x: sx[4 * i], y: h - sx[4 * i + 1] }, end: { x: sx[4 * i + 2], y: h - sx[4 * i + 3] }, thickness: 0.4, color: cols[M.sC[i]] }); }
     for (const t of M.texts) if (!hid[M.layerNames[t.L]] && t.text && t.h > 1) t.text.split('\n').forEach((ln, i) => { try { pg.drawText(winAnsi(ln), { x: t.x, y: h - t.y - (t.top ? t.h : 0) - i * t.h * 1.4, size: t.h, font: f0, color: hexRgb(t.col), rotate: PDFLib.degrees(t.rot * 180 / Math.PI) }); } catch (e) { } });
     conv = (n, p) => [p[0], h - p[1]];
   }
@@ -365,7 +377,7 @@ async function buildPDF() {
       if (inf.rx) { const q = conv(it.page, [inf.rx.x, it.pts[0][1]]); pg.drawLine({ start: { x, y }, end: { x: q[0], y: q[1] }, thickness: size / 10, color: c, dashArray: [size / 3, size / 4] }); txt(Units.fmtLen(inf.dx, proj.units), (x + q[0]) / 2, (y + q[1]) / 2 + size / 4, size * 0.8); }
       if (inf.ry) { const q = conv(it.page, [it.pts[0][0], inf.ry.y]); pg.drawLine({ start: { x, y }, end: { x: q[0], y: q[1] }, thickness: size / 10, color: c, dashArray: [size / 3, size / 4] }); txt(Units.fmtLen(inf.dy, proj.units), (x + q[0]) / 2 + size * 2, (y + q[1]) / 2, size * 0.8); }
       pg.drawCircle({ x, y, size: size * 0.9, borderColor: c, borderWidth: size / 6, color: PDFLib.rgb(1, 1, 1), opacity: 0.9 }); pg.drawLine({ start: { x: x - size * 0.9, y }, end: { x: x + size * 0.9, y }, thickness: size / 10, color: c }); pg.drawLine({ start: { x, y: y - size * 0.9 }, end: { x, y: y + size * 0.9 }, thickness: size / 10, color: c });
-      txt(sleeveName(it) + ' ' + (it.size || ''), x, y + size * 1.3); }
+      txt(sleeveName(it) + ' ' + (it.size || '') + sleeveHtLabel(it), x, y + size * 1.3); }
     else if (it.type === 'text') { (it.text || '').split('\n').forEach((ln, i) => { const s = winAnsi(ln); pg.drawText(s, { x: P[0][0], y: P[0][1] - size * 1.2 * i, size: size * 1.1, font, color: c }); }); }
   }
   for (const pgn in (proj.origins || {})) { const pg = pages[pgn - 1], o = proj.origins[pgn]; if (!pg || !o) continue; const [x, y] = conv(+pgn, o), s = Math.max(6, Math.min(doc.sizes[pgn].w, doc.sizes[pgn].h) / 90), oc = PDFLib.rgb(0.8, 0.1, 0.5);
@@ -382,9 +394,10 @@ let dbp = null;
 function db() { return dbp || (dbp = new Promise((res, rej) => { const r = indexedDB.open('plan-measure', 1); r.onupgradeneeded = () => r.result.createObjectStore('projects', { keyPath: 'id' }); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); })); }
 async function idb(mode, fn) { const d = await db(); return new Promise((res, rej) => { const tx = d.transaction('projects', mode); const r = fn(tx.objectStore('projects')); tx.oncomplete = () => res(r && r.result); tx.onerror = () => rej(tx.error); }); }
 let saveTimer; function persistSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(persist, 800); }
-async function persist() { if (!proj || !doc) return; try { await idb('readwrite', s => s.put({ ...JSON.parse(JSON.stringify(proj)), bytes: doc.bytes, updated: Date.now() })); localStorage.setItem('pm-last', proj.id); } catch (e) { toast('Could not save: ' + e.message); } }
+function packForSave(M) { const o = {}; for (const k in M) if (k[0] !== '_' && typeof M[k] !== 'function') o[k] = M[k]; return o; }
+async function persist() { if (!proj || !doc) return; try { await idb('readwrite', s => s.put({ ...JSON.parse(JSON.stringify(proj)), ...(doc.type === 'cad' ? { bytes: null, cadPack: packForSave(doc.cad) } : { bytes: doc.bytes }), updated: Date.now() })); localStorage.setItem('pm-last', proj.id); } catch (e) { toast('Could not save: ' + e.message); } }
 $('#saveBtn').onclick = async () => { if (!proj) return; const n = prompt('Project name:', proj.name); if (n) { proj.name = n; await persist(); toast('Saved in this browser'); } };
-async function openProject(id) { const r = await idb('readonly', s => s.get(id)); if (!r) return; const { bytes, updated, ...p } = r; await loadDoc(new Uint8Array(bytes), p.fileType, p.fileName); proj = p; resetHist(); $('#units').value = p.units; page = 1; selId = null; draft = null; fitPage(); localStorage.setItem('pm-last', id); }
+async function openProject(id) { const r = await idb('readonly', s => s.get(id)); if (!r) return; const { bytes, cadPack, updated, ...p } = r; await loadDoc(cadPack ? { cadPack } : new Uint8Array(bytes), p.fileType, p.fileName); proj = p; resetHist(); $('#units').value = p.units; page = 1; selId = null; draft = null; fitPage(); localStorage.setItem('pm-last', id); }
 $('#projBtn').onclick = async () => { const all = await idb('readonly', s => s.getAll()); all.sort((a, b) => b.updated - a.updated);
   $('#projList').innerHTML = all.map(p => `<div class="proj"><span>${esc(p.name)}<br><small>${new Date(p.updated).toLocaleString()} - ${p.items.length} items</small></span><button type="button" class="btn" data-open="${p.id}">Open</button><button type="button" class="btn danger" data-del="${p.id}">Delete</button></div>`).join('') || 'No saved projects.';
   $('#projDlg').showModal(); };
@@ -397,7 +410,7 @@ setTool('select'); $('#hint').textContent = 'Open a PDF or image plan to start. 
 (async () => { const last = localStorage.getItem('pm-last'); if (!last) return; let r = null; try { r = await idb('readonly', s => s.get(last)); } catch (e) { } if (!r) return;
   const size = r.bytes ? (r.bytes.byteLength || r.bytes.length || 0) : 0, heavy = r.fileType === 'cad' || /\.(dwg|dxf)$/i.test(r.fileName || '') || size > 8e6, crashed = localStorage.getItem('pm-opening') === last;
   const btn = $('#resumeBtn'); if (btn) { btn.hidden = false; btn.textContent = 'Continue ' + (r.name || r.fileName || 'last project'); btn.onclick = () => openGuarded(last); }
-  if (!heavy && !crashed) openGuarded(last); })();
+  void heavy; void crashed; /* never auto-reopen: the user taps Continue */ })();
 async function openGuarded(id) { localStorage.setItem('pm-opening', id); toast('Opening...', 60000); await new Promise(r => setTimeout(r, 50)); try { await openProject(id); toast('Opened'); } catch (e) { toast('Could not open the project: ' + e.message, 5000); } finally { localStorage.removeItem('pm-opening'); } }
 // test hook
 window.PM = { undo: () => undo(), redo: () => redo(), get hist() { return { u: H.u.length, r: H.r.length }; }, get draft() { return draft; }, get proj() { return proj; }, get doc() { return doc; }, measure, buildCSV, buildPDF, setTool, gotoPage, applyScale, get zoom() { return zoom; } };
@@ -477,9 +490,9 @@ function showLoupe(p, e) {
   const mag = +$('#loupeMag').value, S = zoom * mag * dpr; // device px per page unit inside loupe
   const ctx = lc.getContext('2d');
   // instant preview from the main canvas
-  const k = canvas.width / doc.sizes[page].w, half = L / 2 / S;
+  const g0 = canvas._reg || { x0: 0, y0: 0, w: doc.sizes[page].w }, k = canvas.width / g0.w, half = L / 2 / S;
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, L, L);
-  if (canvas.width) ctx.drawImage(canvas, (p[0] - half) * k, (p[1] - half) * k, 2 * half * k, 2 * half * k, 0, 0, L, L);
+  if (canvas.width) ctx.drawImage(canvas, (p[0] - g0.x0 - half) * k, (p[1] - g0.y0 - half) * k, 2 * half * k, 2 * half * k, 0, 0, L, L);
   loupeOverlay(ctx, p, S, L);
   loupeWant = { p: p.slice(), S, L, pg: page }; sharpLoupe();
 }
@@ -521,11 +534,11 @@ document.querySelectorAll('.tool').forEach(b => b.onclick = () => setTool(b.data
 
 // ---- undo / redo history (snapshots of items + scales, max 100) ----
 const H = { u: [], r: [], cur: null, t: null };
-const snap = () => JSON.stringify({ items: proj.items, scales: proj.scales, scaleNames: proj.scaleNames || {}, origins: proj.origins || {}, hidden: proj.hidden || {} });
+const snap = () => JSON.stringify({ items: proj.items, scales: proj.scales, scaleNames: proj.scaleNames || {}, origins: proj.origins || {}, hidden: proj.hidden || {}, slab: proj.slab || {} });
 function resetHist() { H.u = []; H.r = []; H.cur = proj ? snap() : null; clearTimeout(H.t); H.t = null; updHistBtns(); }
 function commitHist() { clearTimeout(H.t); H.t = null; if (!proj) return; const s = snap(); if (H.cur !== null && s !== H.cur) { H.u.push(H.cur); if (H.u.length > 100) H.u.shift(); H.r = []; } H.cur = s; updHistBtns(); }
 function commitSoon() { clearTimeout(H.t); H.t = setTimeout(commitHist, 400); updHistBtns(); }
-function restore(s) { const o = JSON.parse(s); proj.items = o.items; proj.scales = o.scales; proj.scaleNames = o.scaleNames; proj.origins = o.origins || {}; const hidChanged = JSON.stringify(proj.hidden || {}) !== JSON.stringify(o.hidden || {}); proj.hidden = o.hidden || {}; if (hidChanged) { layersChanged(); renderLayers(); } H.cur = s;
+function restore(s) { const o = JSON.parse(s); proj.items = o.items; proj.scales = o.scales; proj.scaleNames = o.scaleNames; proj.origins = o.origins || {}; proj.slab = o.slab || {}; const hidChanged = JSON.stringify(proj.hidden || {}) !== JSON.stringify(o.hidden || {}); proj.hidden = o.hidden || {}; if (hidChanged) { layersChanged(); renderLayers(); } H.cur = s;
   if (selId && !proj.items.some(i => i.id === selId)) selId = null; layout(); persistSoon(); updHistBtns(); }
 function undo() {
   if (draft && draft.pts.length) { draft.pts.pop(); if (!draft.pts.length) draft = null; draw(); updHistBtns(); return; }
@@ -558,9 +571,12 @@ async function buildGeom(pg) {
   const G = geomCache[pg] = { segs: [], grid: new Map(), ready: false };
   if (!doc) return G;
   if (doc.type === 'cad') { const M = doc.cad, hid = proj.hidden || {}; G.pts = []; G.pgrid = new Map();
-    for (const s of M.segs) if (!hid[M.layerNames[s[5]]]) G.segs.push([s[0], s[1], s[2], s[3], s[4], s[5]]);
-    for (const p of M.pts) if (!hid[M.layerNames[p[3]]]) { const i = G.pts.push(p) - 1, k = Math.floor(p[0] / CELL) + ',' + Math.floor(p[1] / CELL); let c = G.pgrid.get(k); if (!c) G.pgrid.set(k, c = []); c.push(i); }
-    G.segs.forEach((s, i) => gridAdd(G.grid, i, s[0], s[1], s[2], s[3])); G.ready = true; return G; }
+    // typed-array view: G.segs is a small accessor, not a copy of every segment
+    const hidL = M.layerNames.map(n => !!hid[n]), ids = []; for (let i = 0; i < M.nSegs; i++) if (!hidL[M.sL[i]]) ids.push(i);
+    const sx = M.sx, idx = Uint32Array.from(ids); G.cad = { sx, idx, sK: M.sK, sL: M.sL }; G.segs = new Proxy({ length: idx.length }, { get: (o, k) => k === 'length' ? idx.length : (typeof k === 'string' && /^\d+$/.test(k)) ? (j => [sx[4 * j], sx[4 * j + 1], sx[4 * j + 2], sx[4 * j + 3], M.sK[j], M.sL[j]])(idx[+k]) : undefined });
+    const KN = ['end', 'mid', 'center']; G.pts = { get: i => [M.px[2 * i], M.px[2 * i + 1], KN[M.pK[i]]] };
+    for (let i = 0; i < M.nPts; i++) if (!hidL[M.pL[i]]) { const k = Math.floor(M.px[2 * i] / CELL) + ',' + Math.floor(M.px[2 * i + 1] / CELL); let c = G.pgrid.get(k); if (!c) G.pgrid.set(k, c = []); c.push(i); }
+    for (let i = 0; i < idx.length; i++) { const j = idx[i]; gridAdd(G.grid, i, sx[4 * j], sx[4 * j + 1], sx[4 * j + 2], sx[4 * j + 3]); } G.ready = true; return G; }
   if (doc.type === 'image') { const c = document.createElement('canvas'); c.width = doc.sizes[1].w; c.height = doc.sizes[1].h; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(doc.img, 0, 0); G.pix = x.getImageData(0, 0, c.width, c.height); G.ready = true; return G; }
   const page = await doc.pdf.getPage(pg), ops = await page.getOperatorList(), vp = doc.vps[pg], OPS = pdfjsLib.OPS, U = pdfjsLib.Util;
   let ctm = [1, 0, 0, 1, 0, 0]; const stack = [];
@@ -596,7 +612,7 @@ function findSnap(p, r, exclude) {
   if (G && G.ready && G.segs.length) { const ids = nearSegs(G, p, r).slice(0, 400), S = ids.map(i => G.segs[i]);
     for (const s of S) if (!s[4]) { consider([s[0], s[1]], 'end', 0); consider([s[2], s[3]], 'end', 0); }
     if (G.pgrid) { const c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
-      for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) for (const i of (G.pgrid.get(cx + ',' + cy) || [])) consider([G.pts[i][0], G.pts[i][1]], G.pts[i][2], 0); }
+      for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) for (const i of (G.pgrid.get(cx + ',' + cy) || [])) { const q = G.pts.get ? G.pts.get(i) : G.pts[i]; consider([q[0], q[1]], q[2], 0); } }
     { const near = S.filter(s => dist(projSeg(p, s), p) <= r).slice(0, 80);
       for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) { const x = segX(near[i], near[j]); if (x) consider(x, 'x', 0); }
       if (!best) for (const s of near) consider(projSeg(p, s), 'line', 2); } }
@@ -658,7 +674,7 @@ function sleeveInfo(it) {
   let r = sleeveCache.get(it.id); if (!r || r.key !== key) {
     r = { key }; const minLen = 0.015 * Math.min(doc.sizes[it.page].w, doc.sizes[it.page].h);
     if (G && G.ready && G.segs.length) { let bx = Infinity, by = Infinity;
-      for (const s of G.segs) { if (s[4]) continue; const dx = s[2] - s[0], dy = s[3] - s[1], len = Math.hypot(dx, dy); if (len < minLen) continue;
+      const NS = G.segs.length, C = G.cad, tmp = [0, 0, 0, 0, 0, 0]; for (let si = 0; si < NS; si++) { let s; if (C) { const j = C.idx[si]; if (C.sK[j]) continue; tmp[0] = C.sx[4 * j]; tmp[1] = C.sx[4 * j + 1]; tmp[2] = C.sx[4 * j + 2]; tmp[3] = C.sx[4 * j + 3]; tmp[4] = 0; tmp[5] = C.sL[j]; s = tmp; } else s = G.segs[si]; if (s[4]) continue; const dx = s[2] - s[0], dy = s[3] - s[1], len = Math.hypot(dx, dy); if (len < minLen) continue;
         if (Math.abs(dx) <= len * 0.01 && Math.min(s[1], s[3]) <= p[1] + 1e-6 && Math.max(s[1], s[3]) >= p[1] - 1e-6) { const x = (s[0] + s[2]) / 2, d = Math.abs(x - p[0]); if (d > 1e-6 && d < bx) { bx = d; r.rx = { x, L: s[5] }; } }
         if (Math.abs(dy) <= len * 0.01 && Math.min(s[0], s[2]) <= p[0] + 1e-6 && Math.max(s[0], s[2]) >= p[0] - 1e-6) { const y = (s[1] + s[3]) / 2, d = Math.abs(y - p[1]); if (d > 1e-6 && d < by) { by = d; r.ry = { y, L: s[5] }; } } } }
     sleeveCache.set(it.id, r); }
@@ -679,7 +695,7 @@ const _drawItem = drawItem; drawItem = function (it, g, isDraft) {
   if (inf.ry) dim(x, inf.ry.y, inf.dy != null ? Units.fmtLen(inf.dy, u) : '', false);
   el('circle', { cx: x, cy: y, r: R, fill: '#fff', 'fill-opacity': 0.85, stroke: c, 'stroke-width': 2.5 / zoom }, grp);
   el('path', { d: `M${x - R} ${y}H${x + R}M${x} ${y - R}V${y + R}`, stroke: c, 'stroke-width': 1.2 / zoom }, grp);
-  label(grp, x, y - R - 4 / zoom, sleeveName(it) + ' ' + (it.size || '') + (it.label ? ' ' + it.label : ''), c);
+  label(grp, x, y - R - 4 / zoom, sleeveName(it) + ' ' + (it.size || '') + (it.label ? ' ' + it.label : '') + sleeveHtLabel(it), c);
   if (it.id === selId) el('rect', { x: x - 6 / zoom, y: y - 6 / zoom, width: 12 / zoom, height: 12 / zoom, fill: 'none', stroke: '#1976d2', 'stroke-width': 2 / zoom, 'data-v': 0, class: 'handle' }, grp);
 };
 const _draw4 = draw; draw = function () { _draw4(); const o = proj && proj.origins && proj.origins[page]; if (!o) return; const g = el('g', { 'pointer-events': 'none' }, svg), s = 14 / zoom, w = 2 / zoom;
@@ -692,9 +708,9 @@ $('#eSize').addEventListener('change', e => { const it = selItem(); if (it) { it
 function buildSleeveCSV() {
   const u = proj.units, f = v => v == null ? '' : Units.fmtLen(v, u), dec = v => v == null ? '' : (u === 'met' ? v : v / Units.FT).toFixed(4), lu = u === 'met' ? 'm' : 'ft';
   const rows = [['Sleeve schedule', proj.name], ['Origin', Object.keys(proj.origins || {}).length ? 'set (Y up)' : 'not set'], [],
-    ['ID', 'Size', 'Label', 'X from origin', 'Y from origin', `X (${lu})`, `Y (${lu})`, 'Offset to nearest vertical line', 'Offset to nearest horizontal line', `Offset X (${lu})`, `Offset Y (${lu})`, 'Ref X layer', 'Ref Y layer', 'Level / page', 'Note']];
+    ['ID', 'Size', 'Label', 'X from origin', 'Y from origin', `X (${lu})`, `Y (${lu})`, 'Offset to nearest vertical line', 'Offset to nearest horizontal line', `Offset X (${lu})`, `Offset Y (${lu})`, 'Ref X layer', 'Ref Y layer', 'Level / page', 'Note', 'Top of slab', 'Slab thickness', 'Top of sleeve', 'Bottom of sleeve', 'Sleeve length', 'Height from']];
   proj.items.filter(i => i.type === 'sleeve').forEach(it => { const i = sleeveInfo(it);
-    rows.push([sleeveName(it), it.size || '', it.label || '', f(i.X), f(i.Y), dec(i.X), dec(i.Y), f(i.dx), f(i.dy), dec(i.dx), dec(i.dy), i.rxLayer, i.ryLayer, doc.type === 'cad' ? proj.name : 'Page ' + it.page, it.text || '']); });
+    rows.push([sleeveName(it), it.size || '', it.label || '', f(i.X), f(i.Y), dec(i.X), dec(i.Y), f(i.dx), f(i.dy), dec(i.dx), dec(i.dy), i.rxLayer, i.ryLayer, doc.type === 'cad' ? proj.name : 'Page ' + it.page, it.text || '', ...(h => [fmtEl(h.tos), h.thk != null ? fmtThk(h.thk) : '', fmtEl(h.top), fmtEl(h.bot), h.len != null ? fmtThk(h.len) : '', h.src])(sleeveHeight(it))]); });
   return rows.map(r => r.map(csvCell).join(',')).join('\r\n');
 }
 $('#sleeveCsvBtn').onclick = () => { if (!proj) return; if (!proj.items.some(i => i.type === 'sleeve')) return toast('No sleeves yet. Use the Sleeve tool.'); download('\ufeff' + buildSleeveCSV(), proj.name + '-sleeves.csv', 'text/csv'); };
@@ -809,3 +825,93 @@ $('#slvCountBtn').onclick = openSleeveCount; $('#slvCountTool').onclick = openSl
 $('#slvFind').onclick = () => { $('#slvDlg').close(); startFind('auto'); };
 $('#slvCsv').onclick = () => $('#sleeveCsvBtn').click();
 Object.assign(window.PM, { sleeveCounts });
+
+// ---- Sleeve heights: slab zones, level default, per-sleeve override, elevations read from text near the sleeve ----
+// all values in metres; nothing is computed at load time (only when a sleeve is drawn, listed or exported)
+const fmtEl = v => v == null || !isFinite(v) ? '' : proj.units === 'met' ? v.toFixed(3) + ' m' : Units.fmtLen(v, 'imp');
+const fmtThk = v => v == null || !isFinite(v) ? '' : proj.units === 'met' ? Math.round(v * 1000) + ' mm' : Units.fmtLen(v, 'imp');
+function parseEl(s) { s = String(s == null ? '' : s).trim(); if (!s) return null; if (/^-?\d{1,3},\d{3}$/.test(s)) s = s.replace(',', '.'); // 64,800 = 64.800 m (geodetic, comma style)
+  const neg = s.startsWith('-'); const v = Units.parseLength(neg ? s.slice(1) : s, proj.units); return isFinite(v) ? (neg ? -v : v) : NaN; }
+function parseThk(s) { s = String(s == null ? '' : s).trim(); if (!s) return null; if (proj.units === 'met' && /^\d+(\.\d+)?$/.test(s) && +s >= 20) s += 'mm'; const v = Units.parseLength(s, proj.units); return isFinite(v) ? v : NaN; }
+function slabDefault(pg) { proj.slab = proj.slab || {}; return proj.slab[pg] || {}; }
+function inPoly(P, x, y) { let c = false; for (let i = 0, j = P.length - 1; i < P.length; j = i++) { const [xi, yi] = P[i], [xj, yj] = P[j]; if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c; } return c; }
+function zoneAt(pg, x, y) { let best = null, ba = Infinity; for (const z of proj.items) { if (z.type !== 'area' || !z.slab || z.page !== pg || z.pts.length < 3 || !inPoly(z.pts, x, y)) continue; const a = polyArea(z.pts); if (a < ba) { ba = a; best = z; } } return best; }
+const EL_RE = /(?:T\/O\s*(?:SLAB|CONC(?:RETE)?)?|T\/SLAB|TOS|TOP OF SLAB|ELEV\.?|EL\.?)\s*[:=]?\s*([+-]?\d{1,3}(?:[.,]\d{3})|\d+'\s*-?\s*\d+(?:\s+\d\/\d)?"?)/i;
+const htText = new Map();
+function textElevation(it) { if (!doc || doc.type !== 'cad') return null; const [x, y] = it.pts[0], key = it.page + ':' + x + ',' + y; if (htText.has(key)) return htText.get(key);
+  const R = 0.03 * Math.min(doc.cad.w, doc.cad.h), hid = proj.hidden || {}; let best = null, bd = R;
+  for (const t of doc.cad.texts) { if (hid[doc.cad.layerNames[t.L]] || !t.text) continue; const d = Math.hypot(t.x - x, t.y - y); if (d > bd) continue; const m = EL_RE.exec(t.text); if (!m) continue; const v = parseEl(m[1]); if (v != null && isFinite(v)) { bd = d; best = v; } }
+  htText.set(key, best); return best; }
+function sleeveHeight(it) {
+  const d = slabDefault(it.page), z = zoneAt(it.page, it.pts[0][0], it.pts[0][1]); let tos = null, src = '';
+  if (it.tos != null) { tos = it.tos; src = 'override'; } else { const t = textElevation(it); if (t != null) { tos = t; src = 'text on plan'; } else if (z && z.slab.tos != null) { tos = z.slab.tos; src = 'zone ' + (z.label || 'slab'); } else if (d.tos != null) { tos = d.tos; src = 'level default'; } }
+  const thk = it.thk != null ? it.thk : z && z.slab.thk != null ? z.slab.thk : d.thk != null ? d.thk : null, ext = it.ext != null ? it.ext : d.ext || 0;
+  const top = tos != null ? tos + ext : null, bot = tos != null && thk != null ? tos - thk : null, len = thk != null ? thk + ext : null;
+  return { tos, thk, ext, top, bot, len, src, zone: z }; }
+function sleeveHtLabel(it) { if (!proj) return ''; const h = sleeveHeight(it); return h.tos == null ? '' : ' T ' + fmtEl(h.top) + (h.bot != null ? ' B ' + fmtEl(h.bot) : ''); }
+// edit panel rows (area: slab zone; sleeve: height + overrides)
+(function () {
+  const ed = $('#eDel'), mk = html => { const d = document.createElement('div'); d.innerHTML = html; const n = d.firstElementChild; ed.parentNode.insertBefore(n, ed); return n; };
+  mk(`<div id="eZoneRow" class="htbox" hidden><label class="chk"><input type="checkbox" id="eZone"> Slab zone (sleeves inside take these values)</label>
+    <label>Top of slab <input id="eZTos" type="text" placeholder="e.g. 64.800 or 100'-0&quot;"></label><label>Slab thickness <input id="eZThk" type="text" placeholder="e.g. 250mm or 10&quot;"></label></div>`);
+  mk(`<div id="eHtRow" class="htbox" hidden><small id="eHtInfo"></small>
+    <label>Top of slab override <input id="eTos" type="text" placeholder="blank = zone or level"></label><label>Thickness override <input id="eThk" type="text" placeholder="blank = zone or level"></label>
+    <label>Extension above slab <input id="eExt" type="text" placeholder="blank = level default (0)"></label></div>`);
+})();
+function fillHt() { const it = proj && proj.items.find(i => i.id === selId); const za = !!(it && it.type === 'area'), sl = !!(it && it.type === 'sleeve'); $('#eZoneRow').hidden = !za; $('#eHtRow').hidden = !sl; const keep = (id, v) => { if (document.activeElement !== $(id)) $(id).value = v; };
+  if (za) { $('#eZone').checked = !!it.slab; keep('#eZTos', it.slab && it.slab.tos != null ? fmtEl(it.slab.tos) : ''); keep('#eZThk', it.slab && it.slab.thk != null ? fmtThk(it.slab.thk) : ''); $('#eZTos').disabled = $('#eZThk').disabled = !it.slab; }
+  if (sl) { const h = sleeveHeight(it); $('#eHtInfo').textContent = h.tos == null ? 'No slab height yet: set a level default in Sleeve count, draw a slab zone, or type an override.' : `Top of slab ${fmtEl(h.tos)} (${h.src}). Sleeve top ${fmtEl(h.top)}, bottom ${h.bot != null ? fmtEl(h.bot) : '? (no thickness)'}${h.len != null ? ', length ' + fmtThk(h.len) : ''}.`;
+    keep('#eTos', it.tos != null ? fmtEl(it.tos) : ''); keep('#eThk', it.thk != null ? fmtThk(it.thk) : ''); keep('#eExt', it.ext != null ? fmtThk(it.ext) : ''); } }
+const _renderListH = renderList; renderList = function () { _renderListH(); fillHt(); };
+const setNum = (inp, fn, apply) => inp.addEventListener('change', e => { const v = fn(e.target.value); if (Number.isNaN(v)) { toast('Could not read that value. Examples: 64.800, 64,800, 212\'-7", 250mm, 10"'); return; } apply(v); htText.clear(); changed(); });
+$('#eZone').addEventListener('change', e => { const it = selItem(); if (!it) return; if (e.target.checked) it.slab = it.slab || { tos: slabDefault(it.page).tos ?? null, thk: slabDefault(it.page).thk ?? null }; else delete it.slab; changed(); });
+setNum($('#eZTos'), parseEl, v => { const it = selItem(); if (it && it.slab) it.slab.tos = v; });
+setNum($('#eZThk'), parseThk, v => { const it = selItem(); if (it && it.slab) it.slab.thk = v; });
+setNum($('#eTos'), parseEl, v => { const it = selItem(); if (it) { if (v == null) delete it.tos; else it.tos = v; } });
+setNum($('#eThk'), parseThk, v => { const it = selItem(); if (it) { if (v == null) delete it.thk; else it.thk = v; } });
+setNum($('#eExt'), parseThk, v => { const it = selItem(); if (it) { if (v == null) delete it.ext; else it.ext = v; } });
+// Slab zone tool: draws an area that is marked as a slab zone
+(function () { const b = document.createElement('button'); b.id = 'zoneTool'; b.className = 'tool'; b.title = 'Slab zone: draw an area with its own top of slab and thickness'; b.dataset.icon = 'area'; b.innerHTML = '<span class="t">Slab zone</span>';
+  const ar = document.querySelector('[data-tool=area]'); ar.after(b); try { const ic = ar.querySelector('svg'); if (ic) b.prepend(ic.cloneNode(true)); } catch (e) { } })();
+let zoneNext = false;
+$('#zoneTool').onclick = () => { setTool('area'); zoneNext = true; document.querySelectorAll('.tool').forEach(x => x.classList.toggle('active', x.id === 'zoneTool')); toast('Draw the slab zone outline, then Finish. Then enter its top of slab and thickness.', 5000); };
+const _setToolZ = setTool; setTool = function (t) { if (zoneNext && t !== 'area') zoneNext = false; _setToolZ(t); };
+const _changedZ = changed; changed = function () { if (zoneNext && proj) { const it = proj.items[proj.items.length - 1]; if (it && it.type === 'area' && !it.slab && !it._zchk) { const d = slabDefault(it.page); it.slab = { tos: d.tos ?? null, thk: d.thk ?? null }; it.label = it.label || 'Slab zone'; zoneNext = false; selId = it.id; setTool('select'); renderList(); } } _changedZ(); };
+// Sleeve count panel: level defaults + heights
+const _renderSC = renderSleeveCount; renderSleeveCount = function () { _renderSC(); if (!proj) return; const d = slabDefault(page), S = proj.items.filter(i => i.type === 'sleeve');
+  const box = document.createElement('div'); box.id = 'slabBox';
+  const byTos = new Map(); let noH = 0; for (const s of S) { const h = sleeveHeight(s); if (h.tos == null) { noH++; continue; } const k = fmtEl(h.tos) + '|' + (h.bot != null ? fmtEl(h.bot) : '?'); byTos.set(k, (byTos.get(k) || 0) + 1); }
+  box.innerHTML = `<h4>Slab (this level / page)</h4><div class="slabin"><label>Top of slab <input id="dTos" type="text" value="${esc(fmtEl(d.tos))}" placeholder="e.g. 64.800"></label><label>Thickness <input id="dThk" type="text" value="${esc(fmtThk(d.thk))}" placeholder="e.g. 250mm"></label><label>Extension above slab <input id="dExt" type="text" value="${esc(d.ext ? fmtThk(d.ext) : '')}" placeholder="0"></label></div>` +
+    (S.length ? `<h4>By height</h4><table id="slvHt"><tr><th>Top of slab</th><th>Bottom of sleeve</th><th class="n">Count</th></tr>` + [...byTos.entries()].sort().map(([k, n]) => { const [a, b] = k.split('|'); return `<tr><td>${esc(a)}</td><td>${esc(b)}</td><td class="n">${n}</td></tr>`; }).join('') + (noH ? `<tr><td colspan="2">No height</td><td class="n">${noH}</td></tr>` : '') + '</table>' : '');
+  $('#slvBody').appendChild(box);
+  const upd = (id, fn, key) => setNum($(id), fn, v => { proj.slab = proj.slab || {}; const o = proj.slab[page] = Object.assign({}, proj.slab[page]); if (v == null) delete o[key]; else o[key] = v; setTimeout(renderSleeveCount, 0); });
+  upd('#dTos', parseEl, 'tos'); upd('#dThk', parseThk, 'thk'); upd('#dExt', parseThk, 'ext'); };
+Object.assign(window.PM, { sleeveHeight, parseEl, parseThk, setSlabDefault: (pg, o) => { proj.slab = proj.slab || {}; proj.slab[pg] = Object.assign({}, proj.slab[pg], o); htText.clear(); changed(); } });
+
+// re-render the visible region after scrolling settles (bitmap stays in place meanwhile)
+vpEl.addEventListener('scroll', () => { if (!doc) return; gestureUntil = Math.max(gestureUntil, performance.now() + 120); const g = canvas._reg; if (!g) return; scheduleRender(150); }, { passive: true });
+
+// ---- Project file (.pmproj): plan geometry + markups in one compact file. A DWG read on a computer can be opened on a phone without the DWG converter. ----
+const TA = { Float64Array, Float32Array, Uint32Array, Uint16Array, Uint8Array };
+async function buildPmproj() {
+  const bufs = [], put = v => { const off = bufs.reduce((s, b) => s + b.byteLength, 0); const pad = (8 - off % 8) % 8; if (pad) bufs.push(new Uint8Array(pad)); const o = off + pad; bufs.push(new Uint8Array(v.buffer, v.byteOffset, v.byteLength)); return { __ta: v.constructor.name, off: o, len: v.length }; };
+  const enc = v => { if (v && ArrayBuffer.isView(v)) return put(v); if (Array.isArray(v)) return v.map(enc); if (v && typeof v === 'object') { const o = {}; for (const k in v) if (k[0] !== '_' && typeof v[k] !== 'function') o[k] = enc(v[k]); return o; } return v; };
+  const head = { v: 1, proj: JSON.parse(JSON.stringify(proj)), mime: doc.mime, name: doc.name, cad: doc.type === 'cad' ? enc(doc.cad) : null, bytes: doc.type !== 'cad' && doc.bytes ? put(doc.bytes) : null };
+  const hj = new TextEncoder().encode(JSON.stringify(head)), pre = new Uint8Array(12); pre.set(new TextEncoder().encode('PMPROJ1\n')); new DataView(pre.buffer).setUint32(8, hj.length, true);
+  let body = new Blob([pre, hj, new Uint8Array((8 - (12 + hj.length) % 8) % 8), ...bufs]);
+  if (typeof CompressionStream === 'function') body = await new Response(body.stream().pipeThrough(new CompressionStream('gzip'))).blob();
+  return body; }
+async function readPmproj(blob) {
+  let ab = await blob.arrayBuffer(); let u = new Uint8Array(ab);
+  if (u[0] === 0x1f && u[1] === 0x8b) { if (typeof DecompressionStream !== 'function') throw new Error('This browser cannot read compressed project files. Update the browser.'); ab = await new Response(new Blob([u]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer(); u = new Uint8Array(ab); }
+  if (new TextDecoder().decode(u.subarray(0, 8)) !== 'PMPROJ1\n') throw new Error('Not a Plan Measure project file');
+  const hl = new DataView(ab).getUint32(8, true), head = JSON.parse(new TextDecoder().decode(u.subarray(12, 12 + hl))), base = 12 + hl + (8 - (12 + hl) % 8) % 8;
+  const dec = v => { if (v && v.__ta) { const T = TA[v.__ta]; return new T(ab, base + v.off, v.len); } if (Array.isArray(v)) return v.map(dec); if (v && typeof v === 'object') { const o = {}; for (const k in v) o[k] = dec(v[k]); return o; } return v; };
+  return { head, cad: head.cad ? dec(head.cad) : null, bytes: head.bytes ? dec(head.bytes) : null }; }
+async function openPmproj(f) {
+  toast('Opening project file...', 30000); await new Promise(r => setTimeout(r, 30));
+  try { const { head, cad, bytes } = await readPmproj(f); await loadDoc(cad ? { cadPack: cad } : new Uint8Array(bytes), head.mime, head.name);
+    proj = Object.assign({ origins: {}, hidden: {}, slab: {} }, head.proj); resetHist(); $('#units').value = proj.units; page = 1; selId = null; draft = null; fitPage(); renderLayers(); persistSoon(); toast('Opened ' + f.name); }
+  catch (err) { console.error(err); toast('Could not open the project file: ' + err.message, 8000); } }
+$('#pmprojBtn').onclick = async () => { if (!proj || !doc) return toast('Open a plan first.'); toast('Building project file...', 20000); const b = await buildPmproj(); download(b, (proj.name || 'project') + '.pmproj', 'application/octet-stream'); toast('Saved ' + (b.size / 1e6).toFixed(1) + ' MB project file'); };
+Object.assign(window.PM, { buildPmproj });

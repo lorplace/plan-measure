@@ -7,3 +7,4 @@ test/sample-scan*.png
 plan-measure-userfiles/
 test/screen.png
 test/tablet.png
+*.pmproj

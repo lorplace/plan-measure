@@ -13,7 +13,7 @@ with sync_playwright() as p:
     print(M)
     chk(f"fit ignores stray far entity and mirrored blocks land inside: extents x {M['x0']:.0f}..{M['x1']:.0f}", -104000<M['x0']<-100000 and -40000<M['x1']<-35000 and -34000<M['y0']<-31000 and 1000<M['y1']<5000)
     chk(f"aspect about 60x34 m (h {M['h']:.0f})", 850<M['h']<950)
-    gl=pg.evaluate("(()=>{const c=PM.doc.cad,L=c.layerNames.indexOf('A-GLAZ');let n=0,inn=0;for(const s of c.segs)if(s[5]===L){n++;const w=c.toWorld(s[0],s[1]);if(w[0]>-69500&&w[0]<-59500)inn++}return [n,inn]})()")
+    gl=pg.evaluate("(()=>{const c=PM.doc.cad,L=c.layerNames.indexOf('A-GLAZ');let n=0,inn=0;for(let i=0;i<c.nSegs;i++)if(c.sL[i]===L){n++;const w=c.toWorld(c.sx[4*i],c.sx[4*i+1]);if(w[0]>-69500&&w[0]<-59500)inn++}return [n,inn]})()")
     chk(f"mirrored (extrusion -Z) mullions drawn at WCS x -60 m: {gl[1]}/{gl[0]} segments", gl[0]>0 and gl[0]==gl[1])
     chk(f"unresolved external reference reported: {M['xrefs']}", M['xrefs']==['SITE_XREF'] and 'external references' in toast)
     pg.click('#findBtn'); pg.wait_for_timeout(300)

@@ -48,7 +48,7 @@ with sync_playwright() as p:
     pdf=pg.evaluate('PM.buildPDF().then(b=>Array.from(b))'); open('test/out-marked.pdf','wb').write(bytes(pdf))
     pg.screenshot(path='test/screen.png')
     # persistence: reload, project should restore from IndexedDB
-    pg.wait_for_timeout(1200); pg.reload(); pg.wait_for_function('window.PM.proj && PM.proj.items.length>0',timeout=10000)
+    pg.wait_for_timeout(1200); pg.reload(); pg.click('#resumeBtn'); pg.wait_for_function('window.PM.proj && PM.proj.items.length>0',timeout=10000)
     n=pg.evaluate('PM.proj.items.length'); print('after reload items:',n); ok&= n==len(items)+2
     # tablet emulation smoke
     ctx=b.new_context(viewport={'width':1024,'height':768},has_touch=True,is_mobile=True); tp=ctx.new_page(); tp.goto(URL)

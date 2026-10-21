@@ -55,7 +55,7 @@ with sync_playwright() as p:
     for fn,expect in [('/tmp/ex_2018.dwg',True),('/tmp/ex_r14.dwg',False)]:
         pg=b.new_page(viewport={'width':1600,'height':950}); errs=[]; pg.on('pageerror',lambda e:errs.append(str(e))); pg.goto(URL); pg.set_input_files('#file',fn)
         if expect:
-            pg.wait_for_function('window.PM.doc && PM.doc.cad',timeout=60000); pg.wait_for_timeout(800); n=pg.evaluate('PM.doc.cad.segs.length')
+            pg.wait_for_function('window.PM.doc && PM.doc.cad',timeout=60000); pg.wait_for_timeout(800); n=pg.evaluate('PM.doc.cad.nSegs')
             chk(f'DWG 2018 sample opened: {n} segments, {len(pg.evaluate("PM.doc.cad.layers"))} layers, units {pg.evaluate("PM.doc.cad.unitName")}', n>50); pg.screenshot(path='shots/desktop-dwg.png')
         else:
             pg.wait_for_timeout(8000); t=pg.inner_text('#toast'); chk(f'DWG unreadable file shows advice: {t[:90]}', 'DXF' in t or pg.evaluate('!!(PM.doc&&PM.doc.cad)'))

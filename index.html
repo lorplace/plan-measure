@@ -6,7 +6,7 @@
 <link rel="stylesheet" href="style.css"></head>
 <body>
 <header id="bar">
-  <label class="btn primary" data-icon="open">Open plan<input id="file" type="file" accept="application/pdf,image/*,.dxf,.dwg" hidden></label>
+  <label class="btn primary" data-icon="open">Open plan<input id="file" type="file" accept="application/pdf,image/*,.dxf,.dwg,.pmproj" hidden></label>
   <button id="saveBtn" class="btn" title="Save project" data-icon="save">Save</button>
   <button id="projBtn" class="btn" title="Saved projects" data-icon="folder">Projects</button>
   <button id="undoBtn" class="btn icon" data-icon="undo" title="Undo (Ctrl+Z)" disabled></button><button id="redoBtn" class="btn icon" data-icon="redo" title="Redo (Ctrl+Shift+Z / Ctrl+Y)" disabled></button>
@@ -55,6 +55,7 @@
   <button class="btn" data-icon="fit" data-proxy="#fit">Fit page</button>
   <button class="btn" data-icon="save" data-proxy="#saveBtn">Save</button>
   <button class="btn" data-icon="folder" data-proxy="#projBtn">Projects</button>
+  <button class="btn" data-icon="save" id="pmprojBtn">Save project file</button>
   <label class="mrow">Units <select id="units2"><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select></label>
   <button class="btn" data-icon="table" data-proxy="#csvBtn">Export CSV</button>
   <button class="btn" data-icon="find" data-proxy="#findBtn">Find sleeves</button>
@@ -62,7 +63,7 @@
   <button class="btn" data-icon="download" data-proxy="#pdfBtn">Export PDF</button>
 </div>
 <main id="main">
-  <div id="viewport"><div id="empty"><div class="emptybox"><svg class="ic big" viewBox="0 0 24 24"><path d="M4 3h11l5 5v13H4z"/><path d="M15 3v5h5M8 13h8M8 17h5"/></svg><h2>Open a plan</h2><p>PDF, image (PNG, JPG) or CAD (DXF, DWG). Your file stays on this device.</p><button type="button" id="resumeBtn" class="btn bigbtn" hidden>Continue last project</button><label class="btn primary bigbtn">Open plan<input id="file2" type="file" accept="application/pdf,image/*,.dxf,.dwg" hidden></label></div></div><div id="stage"><canvas id="canvas"></canvas><svg id="svg"></svg></div></div>
+  <div id="viewport"><div id="empty"><div class="emptybox"><svg class="ic big" viewBox="0 0 24 24"><path d="M4 3h11l5 5v13H4z"/><path d="M15 3v5h5M8 13h8M8 17h5"/></svg><h2>Open a plan</h2><p>PDF, image (PNG, JPG) or CAD (DXF, DWG). Your file stays on this device.</p><button type="button" id="resumeBtn" class="btn bigbtn" hidden>Continue last project</button><label class="btn primary bigbtn">Open plan<input id="file2" type="file" accept="application/pdf,image/*,.dxf,.dwg,.pmproj" hidden></label></div></div><div id="stage"><canvas id="canvas"></canvas><svg id="svg"></svg></div></div>
   <aside id="side">
     <div id="sheetHandle"><span class="grip"></span><span id="sheetSum">Takeoff</span><span class="chev">Show</span></div>
     <div id="findPanel" hidden><h3>Find sleeves</h3><small id="findSum"></small>
