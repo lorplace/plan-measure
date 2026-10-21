@@ -5,3 +5,5 @@ test/sample-scan*.png
 # private client drawings never go in the repo
 *.dwg
 plan-measure-userfiles/
+test/screen.png
+test/tablet.png
