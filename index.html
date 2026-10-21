@@ -20,6 +20,7 @@
   <select id="units" title="Units"><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select>
   <span class="sep"></span>
   <span class="grow"></span><button id="csvBtn" class="btn" data-icon="table">Export CSV</button>
+  <button id="findBtn" class="btn" data-icon="find" title="Find sleeves drawn in the CAD file">Find sleeves</button>
   <button id="sleeveCsvBtn" class="btn" data-icon="sleeve" title="Export sleeve schedule CSV">Sleeves CSV</button>
   <button id="pdfBtn" class="btn" data-icon="download">Export PDF</button>
   <button id="moreBtn" class="btn icon" data-icon="more" title="More">More</button>
@@ -54,6 +55,7 @@
   <button class="btn" data-icon="folder" data-proxy="#projBtn">Projects</button>
   <label class="mrow">Units <select id="units2"><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select></label>
   <button class="btn" data-icon="table" data-proxy="#csvBtn">Export CSV</button>
+  <button class="btn" data-icon="find" data-proxy="#findBtn">Find sleeves</button>
   <button class="btn" data-icon="sleeve" data-proxy="#sleeveCsvBtn">Sleeves CSV</button>
   <button class="btn" data-icon="download" data-proxy="#pdfBtn">Export PDF</button>
 </div>
@@ -61,6 +63,10 @@
   <div id="viewport"><div id="empty"><div class="emptybox"><svg class="ic big" viewBox="0 0 24 24"><path d="M4 3h11l5 5v13H4z"/><path d="M15 3v5h5M8 13h8M8 17h5"/></svg><h2>Open a plan</h2><p>PDF, image (PNG, JPG) or CAD (DXF, DWG). Your file stays on this device.</p><label class="btn primary bigbtn">Open plan<input id="file2" type="file" accept="application/pdf,image/*,.dxf,.dwg" hidden></label></div></div><div id="stage"><canvas id="canvas"></canvas><svg id="svg"></svg></div></div>
   <aside id="side">
     <div id="sheetHandle"><span class="grip"></span><span id="sheetSum">Takeoff</span><span class="chev">Show</span></div>
+    <div id="findPanel" hidden><h3>Find sleeves</h3><small id="findSum"></small>
+      <div class="frow"><button type="button" id="findAll" class="btn small">Select all</button><button type="button" id="findNone" class="btn small">Select none</button><button type="button" id="findPick" class="btn small">Pick one</button></div>
+      <div id="findList"></div>
+      <div class="frow fbot"><button type="button" id="findAdd" class="btn primary">Add as sleeves</button><button type="button" id="findCancel" class="btn">Cancel</button></div></div>
     <div class="sidehead"><h3>Takeoff totals</h3><button id="panelClose" class="btn icon small" data-icon="close" title="Hide panel"></button></div>
     <div id="totals"></div>
     <div id="layers" hidden><h3>CAD layers <button type="button" id="layersAll" class="btn small">Show all</button></h3><small id="cadInfo"></small><div id="layerList"></div></div>

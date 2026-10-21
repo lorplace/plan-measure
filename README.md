@@ -16,6 +16,10 @@ Everything runs on your device. Files are opened locally in the browser and proj
 | --- | --- |
 | ![DXF plan with layer list, origin and sleeve offsets](shots/desktop-cad-sleeve.png) | ![Magnifier loupe used to place a calibration point](shots/desktop-loupe-calibrate.png) |
 
+| Find sleeves review (desktop) | Find sleeves review (phone) |
+| --- | --- |
+| ![Detected sleeves highlighted with a review list grouped by size](shots/desktop-find-sleeves.png) | ![Find sleeves review list in the phone bottom sheet](shots/phone-find-sleeves.png) |
+
 ## Features
 
 **Plans**
@@ -31,6 +35,7 @@ Everything runs on your device. Files are opened locally in the browser and proj
 **Takeoff tools**
 - Length, pipe run (polyline), area with perimeter, fixture counts with labels and colours, text notes
 - Sleeve tool: size, label and note; X/Y from a user-set origin; automatic offsets to the nearest walls or gridlines
+- Find sleeves (CAD): detects sleeves already drawn in DXF/DWG files from block names, layers and circles matching sleeve keywords (SLEEVE, SLV, PEN, CORE, MANCHON, FOURREAU and more), or from one symbol you pick; reads size from block attributes, nearby text or circle diameter; handles nested, rotated and scaled blocks; review list grouped by size with include/exclude, then adds them as numbered sleeves in one undoable step without duplicates
 - Takeoff panel with totals per type, label and colour
 - Select, move, edit and delete markups; drag individual points
 
@@ -82,7 +87,8 @@ python3 test/make_dxf.py      # sample DXF plans in feet, mm and unitless
 
 python3 -m http.server 8766 &
 python3 test/e2e.py                                  # starts its own server
-for t in phone loupe undo snap cad; do python3 test/$t.py http://127.0.0.1:8766/; done
+python3 test/make_find_dxf.py   # sample DXF with sleeve blocks, circles and decoys
+for t in phone loupe undo snap cad find; do python3 test/$t.py http://127.0.0.1:8766/; done
 ```
 
 The tests launch Chrome from `/usr/bin/google-chrome`; change `executable_path` in the scripts if yours is elsewhere. The DWG checks in `test/cad.py` expect sample files from the LibreDWG test data (`example_2018.dwg`, `example_r14.dwg`) in `/tmp` as `ex_2018.dwg` and `ex_r14.dwg`.

@@ -156,3 +156,20 @@ body:not(.placing) #loupeBtn,body:not(.placing) #loupeMag{display:none}
 #layers .btn.small{color:#333;background:#e3e9ec;border-color:#cfd8dc;min-height:26px;padding:2px 8px}
 @media (min-width:701px) and (max-width:1500px){#sleeveCsvBtn .t{display:none}}
 @media (max-width:700px){#sleeveCsvBtn{display:none}}
+#findPanel{border:2px solid #ff6d00;border-radius:8px;padding:6px 8px;margin:6px 0 10px;background:#fff8f1}
+#findPanel h3{margin-top:2px}
+.frow{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
+#side #findPanel .btn{color:#263238;background:#eceff1;border-color:#cfd8dc;min-height:32px}
+#side #findPanel .btn.primary{background:#ff6d00;border-color:#ff6d00;color:#fff}
+#side #findPanel .btn:disabled{opacity:.45}
+.fgrp{border-top:1px solid #f0d9c4;padding:4px 0}
+.fhead{display:flex;align-items:center;gap:6px;font-size:13px;padding:4px 0;cursor:pointer}.fhead span{margin-left:auto;font-weight:600}.fhead small{flex-basis:100%;color:#78909c;padding-left:22px;margin-top:-4px}
+.fhead{flex-wrap:wrap}
+.fitem{display:flex;align-items:center;gap:6px;padding:3px 0 3px 18px;font-size:12px;cursor:pointer}.fitem small{color:#607d8b}.fitem.dup{opacity:.55}
+body.findmode #side{display:block}
+body.pickmode #viewport{cursor:copy}
+@media (min-width:701px) and (max-width:1500px){#findBtn .t{display:none}}
+@media (max-width:700px){#findBtn{display:none}.fitem{padding:7px 0 7px 18px;font-size:13px}.fhead{padding:8px 0}}
+#bar .btn{white-space:nowrap}
+@media (min-width:701px) and (max-width:1750px){#csvBtn .t,#sleeveCsvBtn .t,#findBtn .t,#pdfBtn .t{display:none}}
+.fbot{position:sticky;bottom:0;background:#fff8f1;padding:6px 0;margin-bottom:0;border-top:1px solid #f0d9c4}

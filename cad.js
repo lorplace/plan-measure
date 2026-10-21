@@ -10,11 +10,19 @@ const ap = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]
 function stripMText(t) { return String(t || '').replace(/\\P/g, '\n').replace(/\\[A-Za-z][^;\\{}]*;/g, '').replace(/\\[A-Za-z]/g, '').replace(/[{}]/g, '').replace(/%%c/gi, 'Ø').replace(/%%d/gi, '°').replace(/%%p/gi, '±'); }
 
 // Normalise dxf-parser or libredwg-web output into {units, layers:{name:{color,on}}, blocks:{name:{base, ents}}, ents}
+function scanAttribs(text) { // dxf-parser drops ATTRIB entities; collect them by owner INSERT handle
+  const L = text.split(/\r?\n/), out = {}; let lastInsert = null, cur = null, inEnt = null;
+  const flush = () => { if (cur && cur.owner) (out[cur.owner] = out[cur.owner] || []).push({ tag: cur.tag || '', value: cur.value || '' }); cur = null; };
+  for (let i = 0; i + 1 < L.length; i += 2) { const c = L[i].trim(), v = L[i + 1].trim();
+    if (c === '0') { flush(); inEnt = v; if (v === 'ATTRIB') cur = { owner: lastInsert }; else if (v !== 'SEQEND' && v !== 'INSERT') lastInsert = v === 'INSERT' ? lastInsert : null; continue; }
+    if (inEnt === 'INSERT' && c === '5') lastInsert = v;
+    if (cur) { if (c === '1') cur.value = v; else if (c === '2') cur.tag = v; else if (c === '330' && !cur.owner) cur.owner = v; } }
+  flush(); return out; }
 function fromDxfParser(d) {
   const layers = {}; const L = (d.tables && d.tables.layer && d.tables.layer.layers) || {};
   for (const n in L) layers[n] = { color: L[n].color != null ? hex(L[n].color) : ACI[L[n].colorIndex] || '#111111', on: L[n].visible !== false && !L[n].frozen };
   const blocks = {}; for (const n in (d.blocks || {})) { const b = d.blocks[n]; blocks[n] = { base: b.position || { x: 0, y: 0 }, ents: b.entities || [] }; }
-  return { units: d.header && d.header.$INSUNITS, layers, blocks, ents: d.entities || [], deg: true };
+  return { units: d.header && d.header.$INSUNITS, layers, blocks, ents: d.entities || [], deg: true, attribs: {} };
 }
 function fromDwg(db) {
   const layers = {}; for (const l of (db.tables.LAYER && db.tables.LAYER.entries) || []) layers[l.name] = { color: ACI[Math.abs(l.colorIndex)] || (l.color ? hex(l.color) : '#111111'), on: !l.off && !l.frozen && l.colorIndex >= 0 };
@@ -23,15 +31,17 @@ function fromDwg(db) {
   const blocks = {}; let model = null;
   for (const r of recs) { const ents = byOwner[r.handle] || []; if (/^\*model_space$/i.test(r.name)) model = ents; blocks[r.name] = { base: r.basePoint || { x: 0, y: 0 }, ents }; }
   if (!model) model = byOwner['1F'] || db.entities.filter(e => !/^\*paper/i.test(e.ownerBlockRecordSoftId));
-  return { units: db.header && (db.header.INSUNITS ?? db.header.$INSUNITS), layers, blocks, ents: model, deg: false };
+  const attribs = {}; for (const e of db.entities) if (e.type === 'ATTRIB') { const t = typeof e.text === 'object' ? e.text : e; (attribs[e.ownerBlockRecordSoftId] = attribs[e.ownerBlockRecordSoftId] || []).push({ tag: e.tag || t.tag || '', value: String(t.text ?? '') }); }
+  return { units: db.header && (db.header.INSUNITS ?? db.header.$INSUNITS), layers, blocks, ents: model, deg: false, attribs };
 }
 
 function build(src) {
-  const segs = [], pts = [], texts = [], layerIdx = {}, layerNames = [];
+  const segs = [], pts = [], texts = [], layerIdx = {}, layerNames = [], inserts = [], circles = [];
   const li = n => { n = n || '0'; if (!(n in layerIdx)) { layerIdx[n] = layerNames.length; layerNames.push(n); if (!src.layers[n]) src.layers[n] = { color: '#111111', on: true }; } return layerIdx[n]; };
   const ang = a => (a || 0) * (src.deg ? Math.PI / 180 : 1);
   function colorOf(e, layer) { const ci = e.colorIndex; if (e.color != null && e.color !== 0 && src.deg) return fixColor(hex(e.color)); if (ci && ci !== 256 && ci !== 0 && ACI[ci]) return fixColor(ACI[ci]); return fixColor(src.layers[layer] ? src.layers[layer].color : '#111111'); }
-  function emit(m, ent, depth, parentLayer) {
+  function emit(m, ent, depth, parentLayer, chain) {
+    chain = chain || [];
     let layer = ent.layer || '0'; if (layer === '0' && parentLayer) layer = parentLayer;
     const L = li(layer), col = colorOf(ent, layer);
     const seg = (a, b, curve) => { const p = ap(m, a[0], a[1]), q = ap(m, b[0], b[1]); segs.push([p[0], p[1], q[0], q[1], curve ? 1 : 0, L, col]); };
@@ -50,7 +60,7 @@ function build(src) {
         else { seg([a.x, a.y], [b.x, b.y]); pt((a.x + b.x) / 2, (a.y + b.y) / 2, 'mid'); } }
       V.forEach(v => pt(v.x, v.y, 'end'));
     }
-    else if (t === 'CIRCLE') { const c = ent.center; poly(arcPts(c.x, c.y, ent.radius, 0, 2 * Math.PI), true); pt(c.x, c.y, 'center'); [0, 1, 2, 3].forEach(i => pt(c.x + ent.radius * Math.cos(i * Math.PI / 2), c.y + ent.radius * Math.sin(i * Math.PI / 2), 'end')); }
+    else if (t === 'CIRCLE') { const c = ent.center; { const q = ap(m, c.x, c.y); circles.push({ x: q[0], y: q[1], r: ent.radius * Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])), L, parents: chain.slice() }); } poly(arcPts(c.x, c.y, ent.radius, 0, 2 * Math.PI), true); pt(c.x, c.y, 'center'); [0, 1, 2, 3].forEach(i => pt(c.x + ent.radius * Math.cos(i * Math.PI / 2), c.y + ent.radius * Math.sin(i * Math.PI / 2), 'end')); }
     else if (t === 'ARC') { const c = ent.center, a0 = src.deg ? ent.startAngle : ent.startAngle, a1 = ent.endAngle; // both libraries give radians for arcs
       const P = arcPts(c.x, c.y, ent.radius, a0, a1); poly(P, true); pt(c.x, c.y, 'center'); pt(P[0][0], P[0][1], 'end'); pt(P[P.length - 1][0], P[P.length - 1][1], 'end'); }
     else if (t === 'ELLIPSE') { const c = ent.center, M = ent.majorAxisEndPoint, ra = ent.axisRatio, rot = Math.atan2(M.y, M.x), R = Math.hypot(M.x, M.y); let a0 = ent.startAngle || 0, a1 = ent.endAngle || 2 * Math.PI; while (a1 <= a0) a1 += 2 * Math.PI;
@@ -68,7 +78,15 @@ function build(src) {
       let M = m;
       if (t === 'INSERT') { const p = ent.position || ent.insertionPoint || { x: 0, y: 0 }, sx = ent.xScale ?? 1, sy = ent.yScale ?? 1, r = ang(ent.rotation), c = Math.cos(r), s = Math.sin(r);
         M = mul(m, [c * sx, s * sx, -s * sy, c * sy, p.x, p.y]); M = mul(M, [1, 0, 0, 1, -(B.base.x || 0), -(B.base.y || 0)]); }
-      for (const e of B.ents) emit(M, e, depth + 1, layer);
+      let idx = -1, c0 = circles.length;
+      if (t === 'INSERT') { const p = ent.position || ent.insertionPoint || { x: 0, y: 0 }, q = ap(m, p.x, p.y);
+        const defs = {}; for (const e of B.ents) if (e.type === 'ATTDEF') { const tx = typeof e.text === 'object' ? e.text : e; defs[(e.tag || tx.tag || '').toUpperCase()] = String(tx.text ?? e.text ?? ''); }
+        const got = (src.attribs[ent.handle] || []).map(a => ({ tag: a.tag, value: a.value })); const have = new Set(got.map(a => a.tag.toUpperCase()));
+        for (const k in defs) if (!have.has(k) && defs[k]) got.push({ tag: k, value: defs[k], def: true });
+        idx = inserts.push({ x: q[0], y: q[1], name, L, attrs: got, depth, parents: chain.slice(), r: 0, rot: Math.atan2(M[1], M[0]) }) - 1; }
+      const ch = idx >= 0 ? chain.concat([idx]) : chain;
+      for (const e of B.ents) emit(M, e, depth + 1, layer, ch);
+      if (idx >= 0) for (let i = c0; i < circles.length; i++) if (circles[i].parents.includes(idx)) inserts[idx].r = Math.max(inserts[idx].r, circles[i].r);
     }
   }
   for (const e of src.ents) if (!/^(XLINE|RAY|VIEWPORT|HATCH|WIPEOUT|3DSOLID)$/.test(e.type)) emit([1, 0, 0, 1, 0, 0], e, 0, null);
@@ -81,13 +99,14 @@ function build(src) {
   for (const s of segs) { const a = P(s[0], s[1]), b = P(s[2], s[3]); s[0] = a[0]; s[1] = a[1]; s[2] = b[0]; s[3] = b[1]; }
   for (const p of pts) { const a = P(p[0], p[1]); p[0] = a[0]; p[1] = a[1]; }
   for (const t of texts) { const a = P(t.x, t.y); t.x = a[0]; t.y = a[1]; t.h *= k; }
+  for (const o of inserts.concat(circles)) { const a = P(o.x, o.y); o.x = a[0]; o.y = a[1]; o.r *= k; }
   const u = src.units | 0;
-  return { segs, pts, texts, layerNames, layers: layerNames.map(n => ({ name: n, color: fixColor(src.layers[n].color), on: src.layers[n].on })),
+  return { segs, pts, texts, layerNames, inserts, circles, layers: layerNames.map(n => ({ name: n, color: fixColor(src.layers[n].color), on: src.layers[n].on })),
     w: (W + 2 * pad) * k, h: (H + 2 * pad) * k, k, ox, oy, units: u, unitM: UNIT_M[u] || null, unitName: UNIT_NAME[u] || 'unitless',
     toWorld: (x, y) => [x / k + ox, oy - y / k] };
 }
 async function parse(bytes, kind) {
-  if (kind === 'dxf') { const text = new TextDecoder('utf-8').decode(bytes); const P = g.DxfParser.default || g.DxfParser; const d = new P().parseSync(text); return build(fromDxfParser(d)); }
+  if (kind === 'dxf') { const text = new TextDecoder('utf-8').decode(bytes); const P = g.DxfParser.default || g.DxfParser; const d = new P().parseSync(text); const src = fromDxfParser(d); src.attribs = scanAttribs(text); return build(src); }
   const mod = await import('./lib/dwg/dist/libredwg-web.js'); const lib = await mod.LibreDwg.create(new URL('lib/dwg/wasm', location.href).href.replace(/\/$/, ''));
   const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength); const dwg = lib.dwg_read_data(ab, mod.Dwg_File_Type.DWG);
   if (!dwg) throw new Error('Could not read this DWG'); const db = lib.convert(dwg); try { lib.dwg_free(dwg); } catch (e) { } return build(fromDwg(db));

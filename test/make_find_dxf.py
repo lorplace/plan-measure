@@ -1,0 +1,21 @@
+import ezdxf
+d = ezdxf.new('R2010'); d.header['$INSUNITS'] = 2; m = d.modelspace()
+for n in ['GRID', 'MISC', 'P-SLEEVE', 'PEN', 'TEXT', 'COLUMNS', 'DRAIN', 'WALLS']: d.layers.add(n)
+for v in (0, 40): m.add_line((v, -2), (v, 42), dxfattribs={'layer': 'GRID'}); m.add_line((-2, v), (42, v), dxfattribs={'layer': 'GRID'})
+b = d.blocks.new('SLEEVE_TAG'); b.add_circle((0, 0), 1); a = b.add_attdef('SIZE', (1.2, 0), dxfattribs={'height': 0.5}); a.dxf.text = '4"'
+def tag(p, size=None, **kw):
+    r = m.add_blockref('SLEEVE_TAG', p, dxfattribs={'layer': 'MISC', **kw})
+    if size: r.add_auto_attribs({'SIZE': size})
+tag((5, 5), '4"'); tag((10, 5), '6"', rotation=30, xscale=0.5, yscale=0.5); tag((15, 5), '100mm'); tag((20, 5))
+m.add_circle((5, 15), 1 / 12, dxfattribs={'layer': 'P-SLEEVE'}); m.add_circle((10, 15), 0.125, dxfattribs={'layer': 'P-SLEEVE'})
+m.add_circle((15, 15), 0.2, dxfattribs={'layer': 'PEN'}); m.add_text('DN100', dxfattribs={'layer': 'TEXT', 'height': 0.2}).set_placement((15.4, 15.3))
+m.add_circle((20, 15), 0.25, dxfattribs={'layer': 'P-SLEEVE'}); m.add_text('8"', dxfattribs={'layer': 'TEXT', 'height': 0.2}).set_placement((20.4, 15.3))
+c = d.blocks.new('CORE-6'); c.add_circle((0, 0), 0.25)
+r = d.blocks.new('MECH_ROOM'); r.add_lwpolyline([(0, 0), (4, 0), (4, 2), (0, 2)], close=True); r.add_blockref('CORE-6', (1, 1)); r.add_blockref('CORE-6', (3, 1))
+m.add_blockref('MECH_ROOM', (30, 20), dxfattribs={'layer': 'WALLS', 'rotation': 90}); m.add_blockref('MECH_ROOM', (30, 30), dxfattribs={'layer': 'WALLS', 'xscale': 2, 'yscale': 2})
+m.add_circle((25, 25), 0.25, dxfattribs={'layer': 'COLUMNS'})
+w = d.blocks.new('WC'); w.add_circle((0, 0), 0.5); m.add_blockref('WC', (35, 10), dxfattribs={'layer': 'MISC'})
+f = d.blocks.new('FIX-X'); f.add_circle((0, 0), 0.3); f.add_line((-0.3, 0), (0.3, 0))
+for x in (5, 10, 15): m.add_blockref('FIX-X', (x, 35), dxfattribs={'layer': 'MISC'})
+for x, rr in [(20, 0.1), (22, 0.1), (24, 0.2)]: m.add_circle((x, 35), rr, dxfattribs={'layer': 'DRAIN'})
+d.saveas('test/sample-sleeves.dxf'); print('ok')

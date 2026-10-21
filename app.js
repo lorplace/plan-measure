@@ -402,7 +402,7 @@ const ICONS = {
  fit:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>', ruler:'<path d="M3 16L16 3l5 5L8 21z"/><path d="M7 12l2 2M10 9l2 2M13 6l2 2"/>',
  table:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M3 15h18M9 4v16"/>', download:'<path d="M12 3v12M7 10l5 5 5-5M4 20h16"/>',
  panel:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M15 4v16"/>', close:'<path d="M6 6l12 12M18 6L6 18"/>',
- undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-4"/>', redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h4"/>', snap:'<rect x="8" y="8" width="8" height="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>', sleeve:'<circle cx="12" cy="12" r="7"/><path d="M5 12h14M12 5v14"/>', origin:'<path d="M4 20V4M4 20h16"/><circle cx="4" cy="20" r="2"/>', layers:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>', select:'<path d="M5 3l14 8-6 2-2 6z"/>', loupe:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>', up:'<path d="M5 15l7-7 7 7"/>', down:'<path d="M5 9l7 7 7-7"/>', more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
+ undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-4"/>', redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h4"/>', snap:'<rect x="8" y="8" width="8" height="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>', sleeve:'<circle cx="12" cy="12" r="7"/><path d="M5 12h14M12 5v14"/>', origin:'<path d="M4 20V4M4 20h16"/><circle cx="4" cy="20" r="2"/>', layers:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>', find:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20"/><circle cx="10" cy="10" r="2"/>', select:'<path d="M5 3l14 8-6 2-2 6z"/>', loupe:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>', up:'<path d="M5 15l7-7 7 7"/>', down:'<path d="M5 9l7 7 7-7"/>', more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
  cal:'<path d="M4 20L20 4"/><circle cx="4" cy="20" r="2"/><circle cx="20" cy="4" r="2"/><path d="M9 9l-2-2M15 15l2 2"/>', line:'<path d="M4 18L20 6"/><path d="M4 14v8M20 2v8"/>',
  poly:'<path d="M3 19h6V9h6v6h6"/><circle cx="3" cy="19" r="1.5"/><circle cx="21" cy="15" r="1.5"/>', area:'<path d="M4 6l12-2 4 10-8 6-8-4z" fill="currentColor" fill-opacity=".25"/>',
  count:'<circle cx="7" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="12" cy="17" r="3"/>', text:'<path d="M5 5h14M12 5v14M9 19h6"/>'
@@ -692,3 +692,85 @@ function buildSleeveCSV() {
 }
 $('#sleeveCsvBtn').onclick = () => { if (!proj) return; if (!proj.items.some(i => i.type === 'sleeve')) return toast('No sleeves yet. Use the Sleeve tool.'); download('\ufeff' + buildSleeveCSV(), proj.name + '-sleeves.csv', 'text/csv'); };
 Object.assign(window.PM, { buildSleeveCSV, sleeveInfo }); Object.defineProperty(window.PM, 'origins', { get: () => proj.origins });
+// ---- Find sleeves (CAD auto-detection) ----
+const SLV_KEYS = ['SLEEVE', 'SLV', 'MANCHON', 'PEN', 'PENETRATION', 'CORE', 'CORING', 'FOURREAU'];
+function slvMatch(s) { s = String(s || '').toUpperCase(); if (/SLEEVE|MANCHON|PENETRATION|FOURREAU|CORING/.test(s)) return true; return s.split(/[^A-Z0-9]+/).some(t => SLV_KEYS.some(k => t.startsWith(k) && /^\d*$/.test(t.slice(k.length)))); }
+const NOMINAL_IN = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 14, 16];
+const inStr = v => { const w = Math.floor(v + 1e-9), f = v - w; const fr = { 0.25: '1/4', 0.5: '1/2', 0.75: '3/4' }[Math.round(f * 4) / 4] || ''; return (w ? w + (fr ? '-' + fr : '') : fr) + '"'; };
+function parseSize(s) { // returns size label or null
+  s = String(s || '').replace(/\\[A-Za-z][^;]*;/g, '').trim(); let m;
+  if ((m = s.match(/\bDN\s*(\d{2,4})\b/i))) return 'DN' + m[1];
+  if ((m = s.match(/(\d+(?:\.\d+)?)\s*mm\b/i))) return m[1] + 'mm';
+  if ((m = s.match(/(?:^|[^\d\/.])(\d+)[- ](\d)\/(\d)\s*(?:"|''|in\b|po\b)/i))) return m[1] + '-' + m[2] + '/' + m[3] + '"';
+  if ((m = s.match(/(?:^|[^\d\/.])(\d)\/(\d)\s*(?:"|''|in\b|po\b)/i))) return m[1] + '/' + m[2] + '"';
+  if ((m = s.match(/(?:^|[^\d\/.])(\d+(?:\.\d+)?)\s*(?:"|''|in\b|inch|po\b)/i))) return m[1] + '"';
+  if ((m = s.match(/[ØøΦ⌀]\s*(\d+(?:\.\d+)?)/))) return m[1] + (proj && proj.units === 'met' ? 'mm' : '"');
+  return null; }
+function sizeFromDia(rPage) { const s = scaleOf(page); if (!s || !rPage) return { size: '', raw: '' }; const dm = 2 * rPage * s, din = dm / Units.IN;
+  const raw = proj.units === 'met' ? 'Ø ' + (dm * 1000).toFixed(0) + ' mm' : 'Ø ' + din.toFixed(2) + '"'; let best = NOMINAL_IN[0]; for (const n of NOMINAL_IN) if (Math.abs(n - din) < Math.abs(best - din)) best = n; return { size: inStr(best), raw }; }
+function nearText(x, y, R) { let best = null, bd = R; for (const t of doc.cad.texts) { if ((proj.hidden || {})[doc.cad.layerNames[t.L]]) continue; const d = Math.hypot(t.x - x, t.y - y); if (d <= bd) { const sz = parseSize(t.text); if (sz) { bd = d; best = sz; } } } return best; }
+function candSize(c) { // attributes > nearby text > diameter
+  const dia = sizeFromDia(c.r); let size = null, src = '';
+  if (c.attrs) { const pref = c.attrs.slice().sort((a, b) => (/SIZE|DIA|TAILLE|DIAM/i.test(b.tag) ? 1 : 0) - (/SIZE|DIA|TAILLE|DIAM/i.test(a.tag) ? 1 : 0) || (a.def ? 1 : 0) - (b.def ? 1 : 0));
+    for (const a of pref) { const s = parseSize(a.value); if (s) { size = s; src = a.def ? 'block default' : 'attribute'; break; } } }
+  if (!size) { const R = Math.max(4 * (c.r || 0), 0.015 * Math.min(doc.cad.w, doc.cad.h)); const t = nearText(c.x, c.y, R); if (t) { size = t; src = 'nearby text'; } }
+  if (!size && dia.size) { size = dia.size; src = 'diameter'; }
+  return { size: size || '?', src: src || 'unknown', raw: dia.raw }; }
+function findCandidates(mode, pick) {
+  const M = doc.cad, hid = proj.hidden || {}, out = [], vis = L => !hid[M.layerNames[L]];
+  const insOK = new Set();
+  M.inserts.forEach((s, i) => { if (!vis(s.L)) return; const ok = mode === 'pick' ? (pick.kind === 'insert' && s.name === pick.name) : (slvMatch(s.name) || slvMatch(M.layerNames[s.L]));
+    if (ok && !s.parents.some(p => insOK.has(p))) { insOK.add(i); out.push({ kind: 'insert', x: s.x, y: s.y, r: s.r, name: s.name, L: s.L, attrs: s.attrs }); } });
+  M.circles.forEach(c => { if (!vis(c.L) || c.parents.some(p => insOK.has(p))) return;
+    const ok = mode === 'pick' ? (pick.kind === 'circle' && c.L === pick.L && Math.abs(c.r - pick.r) <= pick.r * 0.01) : slvMatch(M.layerNames[c.L]);
+    if (ok) out.push({ kind: 'circle', x: c.x, y: c.y, r: c.r, name: '', L: c.L }); });
+  // de-duplicate coincident candidates and mark ones already added as sleeves
+  const tol = 1e-4 * Math.max(M.w, M.h), res = [];
+  for (const c of out) { if (res.some(o => Math.hypot(o.x - c.x, o.y - c.y) < tol)) continue; res.push(c); }
+  const sleeves = proj.items.filter(i => i.type === 'sleeve' && i.page === page);
+  res.forEach((c, i) => { Object.assign(c, candSize(c)); c.id = 'c' + i; c.layer = M.layerNames[c.L]; c.dup = sleeves.some(s => Math.hypot(s.pts[0][0] - c.x, s.pts[0][1] - c.y) < tol); c.on = !c.dup; });
+  return res;
+}
+let FS = null; // review state {cands, mode}
+function startFind(mode, pick) {
+  if (!doc || doc.type !== 'cad') return toast('Find sleeves works on CAD drawings (DXF or DWG). On PDFs use the Sleeve tool.', 5000);
+  const cands = findCandidates(mode, pick); FS = { cands, mode }; document.body.classList.add('findmode'); if (phoneMQ.matches) document.body.classList.add('sheetopen');
+  renderFind(); draw(); toast(cands.length ? `Found ${cands.length} candidate${cands.length > 1 ? 's' : ''}. Review, then Add as sleeves.` : (mode === 'pick' ? 'No matching symbols found.' : 'No sleeves found by keyword. Try Pick one: click a sleeve symbol on the plan.'), 5000);
+}
+function endFind() { FS = null; document.body.classList.remove('findmode', 'pickmode'); renderFind(); draw(); }
+function findGroups() { const g = new Map(); for (const c of FS.cands) { const k = c.size + '|' + c.layer + '|' + (c.name || 'circle'); if (!g.has(k)) g.set(k, { key: k, size: c.size, layer: c.layer, name: c.name, items: [] }); g.get(k).items.push(c); } return [...g.values()].sort((a, b) => a.size.localeCompare(b.size, undefined, { numeric: true })); }
+function renderFind() {
+  const box = $('#findPanel'); box.hidden = !FS; if (!FS) return; const u = proj.units, o = proj.origins && proj.origins[page], s = scaleOf(page);
+  const xy = c => o && s ? `X ${Units.fmtLen((c.x - o[0]) * s, u)}, Y ${Units.fmtLen((o[1] - c.y) * s, u)}` : '';
+  const sel = FS.cands.filter(c => c.on).length;
+  $('#findSum').textContent = `${FS.cands.length} found, ${sel} selected` + (FS.cands.some(c => c.dup) ? `, ${FS.cands.filter(c => c.dup).length} already added` : '');
+  $('#findList').innerHTML = findGroups().map(g => { const n = g.items.filter(c => c.on).length, all = g.items.filter(c => !c.dup);
+    return `<div class="fgrp"><label class="fhead"><input type="checkbox" data-grp="${esc(g.key)}" ${all.length && n === all.length ? 'checked' : ''} ${all.length ? '' : 'disabled'}><b>${esc(g.size)}</b><span>${g.items.length} ea</span><small>${esc(g.layer)}${g.name ? ' / ' + esc(g.name) : ' / circle'}</small></label>` +
+      g.items.map(c => `<label class="fitem ${c.dup ? 'dup' : ''}" data-cid="${c.id}"><input type="checkbox" data-cid="${c.id}" ${c.on ? 'checked' : ''} ${c.dup ? 'disabled' : ''}><span>${esc(c.size)}</span><small>${c.dup ? 'already added' : esc(c.src)}${c.raw && c.kind === 'circle' ? ' - ' + esc(c.raw) : ''}${xy(c) ? ' - ' + xy(c) : ''}</small></label>`).join('') + '</div>'; }).join('') || '<small>Nothing found.</small>';
+  $('#findAdd').disabled = !sel; $('#findAdd').textContent = `Add ${sel} as sleeves`;
+}
+$('#findList').addEventListener('change', e => { const t = e.target; if (t.dataset.grp != null) { const g = findGroups().find(x => x.key === t.dataset.grp); g.items.forEach(c => { if (!c.dup) c.on = t.checked; }); }
+  else if (t.dataset.cid) { const c = FS.cands.find(x => x.id === t.dataset.cid); c.on = t.checked; } renderFind(); draw(); });
+$('#findList').addEventListener('mouseover', e => { const r = e.target.closest('[data-cid]'); FS && (FS.hot = r ? r.dataset.cid : null); draw(); });
+$('#findAll').onclick = () => { FS.cands.forEach(c => { if (!c.dup) c.on = true; }); renderFind(); draw(); };
+$('#findNone').onclick = () => { FS.cands.forEach(c => c.on = false); renderFind(); draw(); };
+$('#findCancel').onclick = endFind;
+$('#findPick').onclick = () => { document.body.classList.add('pickmode'); setTool('select'); toast('Click one sleeve symbol (block or circle) on the plan.', 5000); };
+$('#findAdd').onclick = () => { const add = FS.cands.filter(c => c.on && !c.dup); if (!add.length) return;
+  for (const c of add) proj.items.push({ id: uid(), type: 'sleeve', page, pts: [[c.x, c.y]], color: $('#color').value, label: '', size: c.size === '?' ? '' : c.size, text: [c.name ? 'Block ' + c.name : 'Circle', 'layer ' + c.layer, c.raw].filter(Boolean).join(', '), src: 'auto' });
+  changed(); toast(`Added ${add.length} sleeve${add.length > 1 ? 's' : ''}. Undo removes them in one step.`, 5000); endFind(); };
+$('#findBtn').onclick = () => startFind('auto');
+// pick-one: next click on the plan selects nearest insert or circle
+vpEl.addEventListener('pointerdown', e => { if (!document.body.classList.contains('pickmode') || !doc || doc.type !== 'cad') return; e.stopImmediatePropagation(); e.preventDefault();
+  const p = pagePt(e), M = doc.cad, hid = proj.hidden || {}, R = (e.pointerType === 'mouse' ? 14 : 26) / zoom; let best = null, bd = Infinity;
+  M.inserts.forEach(s => { if (hid[M.layerNames[s.L]]) return; const d = Math.hypot(s.x - p[0], s.y - p[1]) - Math.max(s.r, 0); if (d < bd) { bd = d; best = { kind: 'insert', name: s.name, top: s }; } });
+  M.circles.forEach(c => { if (hid[M.layerNames[c.L]]) return; const dc = Math.hypot(c.x - p[0], c.y - p[1]), d = Math.min(Math.abs(dc - c.r), dc); if (d < bd) { bd = d; best = { kind: 'circle', L: c.L, r: c.r }; } });
+  document.body.classList.remove('pickmode');
+  if (!best || bd > R) return toast('No block or circle there. Try again with Pick one.', 4000);
+  if (best.kind === 'insert') { let s = best.top; while (s.parents.length && !slvMatch(s.name)) { const par = M.inserts[s.parents[s.parents.length - 1]]; if (slvMatch(par.name)) s = par; else break; } best.name = s.name; }
+  startFind('pick', best); }, true);
+const _draw5 = draw; draw = function () { _draw5(); if (!FS) return; const g = el('g', { 'pointer-events': 'none' }, svg);
+  for (const c of FS.cands) { const r = Math.max(c.r || 0, 7 / zoom) + 4 / zoom, hot = FS.hot === c.id;
+    el('circle', { cx: c.x, cy: c.y, r: hot ? r * 1.6 : r, fill: c.on ? '#ff6d00' : 'none', 'fill-opacity': 0.25, stroke: c.dup ? '#9e9e9e' : c.on ? '#ff6d00' : '#607d8b', 'stroke-width': (hot ? 3.5 : 2.5) / zoom, 'stroke-dasharray': c.on ? '' : `${4 / zoom} ${3 / zoom}` }, g); } };
+const _renderList2 = renderList; renderList = function () { _renderList2(); const it = proj && proj.items.find(i => i.id === selId); if (it && it.type === 'sleeve' && it.size && ![...$('#eSize').options].some(o => o.value === it.size)) { const o = document.createElement('option'); o.textContent = it.size; $('#eSize').appendChild(o); $('#eSize').value = it.size; } };
+Object.assign(window.PM, { findCandidates, startFind, get FS() { return FS; } }); Object.defineProperty(window.PM, 'FS', { get: () => FS });
