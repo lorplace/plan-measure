@@ -36,6 +36,7 @@ Everything runs on your device. Files are opened locally in the browser and proj
 - Length, pipe run (polyline), area with perimeter, fixture counts with labels and colours, text notes
 - Sleeve tool: size, label and note; X/Y from a user-set origin; automatic offsets to the nearest walls or gridlines
 - Sleeve heights: set a top of slab, thickness and extension per level in Sleeve count, or draw a Slab zone (an area with its own top of slab and thickness). Each sleeve gets top, bottom and length. You can type an override per sleeve. Elevation text next to a sleeve (for example "T/O SLAB 64,650") is read automatically. Heights show on the sleeve label, in Sleeve count, and in the sleeves CSV and PDF, in metric or feet-inches
+- Auto straight (on by default; button in the toolbar / phone drawing bar; hold Alt to pause): Length, Pipe run, Area and Calibrate points lock to level, plumb, 45 degrees or the drawing's main angle when within about 5 degrees, and line up with the X or Y of existing points. A dashed guide and a 'straight' badge show, also in the magnifier. Snapping to a drawing point still wins
 - Delete: tap a markup with Select (generous touch area) for a floating Edit / Delete bar; trash button or swipe left on list rows; delete a sleeve size from the Sleeve count panel; Clear page and Delete all of a type in the menu; Delete key and a trash button in the top bar on desktop. Every delete can be undone (Undo button in the message)
 - Phone-friendly loading: DWG/DXF files are read in a Web Worker that is closed afterwards, geometry is kept as compact typed arrays, only the visible part of the plan is rendered (tiled, level of detail), and zoom/pan move the existing image until the gesture ends
 - Project file (.pmproj): save plan geometry plus markups on a computer and open it on a phone without converting the DWG again
@@ -94,7 +95,7 @@ python3 -m http.server 8766 &
 python3 test/e2e.py                                  # starts its own server
 python3 test/make_find_dxf.py   # sample DXF with sleeve blocks, circles and decoys
 python3 test/make_revit_dxf.py  # synthetic Revit-style export (far-from-origin link blocks, mirrored families, stray entity, missing xref)
-for t in phone loupe undo snap cad find revit count webkit pmproj heights delete; do python3 test/$t.py http://127.0.0.1:8766/; done
+for t in phone loupe undo snap cad find revit count webkit pmproj heights delete straight; do python3 test/$t.py http://127.0.0.1:8766/; done
 ```
 
 The tests launch Chrome from `/usr/bin/google-chrome`; change `executable_path` in the scripts if yours is elsewhere. The DWG checks in `test/cad.py` expect sample files from the LibreDWG test data (`example_2018.dwg`, `example_r14.dwg`) in `/tmp` as `ex_2018.dwg` and `ex_r14.dwg`.
