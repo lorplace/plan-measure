@@ -39,7 +39,8 @@ function snapOrtho(prev, p) { if (!prev) return p; const dx = Math.abs(p[0] - pr
 function fileMime(f) { const n = f.name.toLowerCase(); if (n.endsWith('.dxf')) return 'application/dxf'; if (n.endsWith('.dwg')) return 'application/dwg'; return f.type || (n.endsWith('.pdf') ? 'application/pdf' : 'image/png'); }
 async function onFile(e) { const f = e.target.files[0]; if (!f) return; e.target.value = '';
   const bytes = new Uint8Array(await f.arrayBuffer());
-  if (fileMime(f) === 'application/dwg') toast('Reading DWG (first time loads a 10 MB converter)...', 8000);
+  if (fileMime(f) === 'application/dwg') toast('Reading DWG (first time loads a 10 MB converter)...', 8000); else toast('Opening...', 8000);
+  await new Promise(r => setTimeout(r, 50)); // let the message paint before heavy parsing
   try { await loadDoc(bytes, fileMime(f), f.name); } catch (err) { console.error(err); doc = null; layout();
     return toast(fileMime(f) === 'application/dwg' ? 'Could not read this DWG (' + err.message + '). Save it as DXF from your CAD program, or convert it free with ODA File Converter, then open the DXF.' : 'Could not open file: ' + err.message, 10000); }
   proj = { id: uid(), name: f.name.replace(/\.[^.]+$/, ''), fileName: f.name, fileType: doc.mime, units: $('#units').value, scales: {}, items: [], origins: {}, hidden: {} };
@@ -391,7 +392,13 @@ $('#projList').addEventListener('click', async e => { const o = e.target.dataset
   if (o) { $('#projDlg').close(); await openProject(o); } if (d && confirm('Delete this project?')) { await idb('readwrite', s => s.delete(d)); $('#projDlg').close(); $('#projBtn').click(); } });
 
 setTool('select'); $('#hint').textContent = 'Open a PDF or image plan to start. Your work is saved automatically in this browser.';
-(async () => { const last = localStorage.getItem('pm-last'); if (last) try { await openProject(last); } catch (e) { } })();
+// Start-up: never auto-open big or CAD projects (parsing a large DWG blocks the page on phones for a long time and looked like a frozen app).
+// Small projects reopen automatically unless the previous attempt did not finish (crash guard); otherwise offer a Continue button.
+(async () => { const last = localStorage.getItem('pm-last'); if (!last) return; let r = null; try { r = await idb('readonly', s => s.get(last)); } catch (e) { } if (!r) return;
+  const size = r.bytes ? (r.bytes.byteLength || r.bytes.length || 0) : 0, heavy = r.fileType === 'cad' || /\.(dwg|dxf)$/i.test(r.fileName || '') || size > 8e6, crashed = localStorage.getItem('pm-opening') === last;
+  const btn = $('#resumeBtn'); if (btn) { btn.hidden = false; btn.textContent = 'Continue ' + (r.name || r.fileName || 'last project'); btn.onclick = () => openGuarded(last); }
+  if (!heavy && !crashed) openGuarded(last); })();
+async function openGuarded(id) { localStorage.setItem('pm-opening', id); toast('Opening...', 60000); await new Promise(r => setTimeout(r, 50)); try { await openProject(id); toast('Opened'); } catch (e) { toast('Could not open the project: ' + e.message, 5000); } finally { localStorage.removeItem('pm-opening'); } }
 // test hook
 window.PM = { undo: () => undo(), redo: () => redo(), get hist() { return { u: H.u.length, r: H.r.length }; }, get draft() { return draft; }, get proj() { return proj; }, get doc() { return doc; }, measure, buildCSV, buildPDF, setTool, gotoPage, applyScale, get zoom() { return zoom; } };
 $('#calVal').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#calDlg').close('ok'); } });
