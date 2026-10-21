@@ -35,6 +35,7 @@ Everything runs on your device. Files are opened locally in the browser and proj
 **Takeoff tools**
 - Length, pipe run (polyline), area with perimeter, fixture counts with labels and colours, text notes
 - Sleeve tool: size, label and note; X/Y from a user-set origin; automatic offsets to the nearest walls or gridlines
+- Sleeve heights: set a top of slab, thickness and extension per level in Sleeve count, or draw a Slab zone (an area with its own top of slab and thickness). Each sleeve gets top, bottom and length. You can type an override per sleeve. Elevation text next to a sleeve (for example "T/O SLAB 64,650") is read automatically. Heights show on the sleeve label, in Sleeve count, and in the sleeves CSV and PDF, in metric or feet-inches
 - Delete: tap a markup with Select (generous touch area) for a floating Edit / Delete bar; trash button or swipe left on list rows; delete a sleeve size from the Sleeve count panel; Clear page and Delete all of a type in the menu; Delete key and a trash button in the top bar on desktop. Every delete can be undone (Undo button in the message)
 - Phone-friendly loading: DWG/DXF files are read in a Web Worker that is closed afterwards, geometry is kept as compact typed arrays, only the visible part of the plan is rendered (tiled, level of detail), and zoom/pan move the existing image until the gesture ends
 - Project file (.pmproj): save plan geometry plus markups on a computer and open it on a phone without converting the DWG again
