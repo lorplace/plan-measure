@@ -203,3 +203,7 @@ body.pickmode #viewport{cursor:copy}
 #delTypeDlg .list{display:flex;flex-direction:column;gap:8px;margin:10px 0}
 #moreMenu .btn.danger{justify-content:flex-start}
 @media (max-width:800px){#undoToast{bottom:calc(150px + env(safe-area-inset-bottom))}.rdel{padding:8px 10px}.rdel .ic{width:22px;height:22px}#selBar .btn{min-height:46px;font-size:16px}}
+/* no iOS text selection, callout or tap highlight on the app chrome and plan; inputs stay selectable */
+body,#viewport,#stage,#canvas,#svg,#loupe,#tools,#topbar,nav,header,#drawBar,#selBar,.tool,.btn{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
+input,textarea,select,[contenteditable]{-webkit-user-select:text;user-select:text;-webkit-touch-callout:default}
+#canvas,#svg,#stage{touch-action:none}

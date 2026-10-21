@@ -8,7 +8,7 @@ const TYPE_NAMES = {line:'Length', poly:'Pipe run', area:'Area', count:'Count', 
 let doc = null;          // {type,name,bytes,pdf,img,numPages,sizes:[{w,h}],vps:[]}
 let proj = null;         // {id,name,units,scales:{},items:[]}
 let page = 1, zoom = 1, tool = 'select', draft = null, hover = null, selId = null;
-let renderTask = null, renderTimer = null, shiftDown = false;
+let renderTask = null, renderTimer = null, shiftDown = false, guide = null, straightOn = localStorage.getItem('pm-straight') !== '0';
 
 // ---------- helpers ----------
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -514,6 +514,7 @@ function loupeOverlay(ctx, p, S, L) {
   const T = q => [(q[0] - p[0]) * S + L / 2, (q[1] - p[1]) * S + L / 2], dpr = window.devicePixelRatio || 1;
   if (draft && draft.pts.length) { ctx.strokeStyle = draft.color; ctx.lineWidth = 1.5 * dpr; ctx.beginPath(); draft.pts.forEach((q, i) => { const [x, y] = T(q); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); if (!(draft.type === 'calibrate' && draft.pts.length === 2) && hover) { const [x, y] = T(hover); ctx.lineTo(x, y); } ctx.stroke();
     draft.pts.forEach((q, i) => { const [x, y] = T(q); ctx.beginPath(); ctx.arc(x, y, (i === calSel ? 5 : 3) * dpr, 0, 7); ctx.strokeStyle = i === calSel ? '#ffb300' : draft.color; ctx.stroke(); }); }
+  if (guide) { ctx.save(); ctx.setLineDash([5 * dpr, 4 * dpr]); ctx.strokeStyle = '#2962ff'; ctx.lineWidth = 1.2 * dpr; for (const [a, b] of guideLines(guide, L / S)) { const A = T(a), B = T(b); ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke(); } ctx.restore(); }
   if (snapHit) { const [sx, sy] = T(snapHit.p); drawSnapMark(ctx, sx, sy, snapHit.kind, 7 * dpr, 2 * dpr); }
   ctx.strokeStyle = '#e53935'; ctx.lineWidth = 1 * dpr; const c = L / 2, g = 6 * dpr; ctx.beginPath();
   ctx.moveTo(0, c); ctx.lineTo(c - g, c); ctx.moveTo(c + g, c); ctx.lineTo(L, c); ctx.moveTo(c, 0); ctx.lineTo(c, c - g); ctx.moveTo(c, c + g); ctx.lineTo(c, L); ctx.stroke();
@@ -631,12 +632,18 @@ function findSnap(p, r, exclude) {
 function aim(p, e, prev, exclude) {
   let q = p; const ortho = prev && (e.shiftKey || shiftDown);
   if (ortho) q = snapOrtho(prev, q);
-  snapHit = null;
+  snapHit = null; guide = null;
+  const touchR = e.pointerType && e.pointerType !== 'mouse';
+  const st = !ortho && prev && straightOn && !e.altKey && PLACE.includes(tool) && proj ? straighten(p, prev, (touchR ? 14 : 8) / zoom, exclude) : null;
+  if (st) q = st.q;
   if (snapOn && !e.altKey && doc && proj) {
     if (!geomCache[page]) buildGeom(page);
-    const r = (e.pointerType && e.pointerType !== 'mouse' ? 22 : 12) / zoom, h = findSnap(q, r, exclude);
-    if (h) { snapHit = { p: h.p.slice(), kind: h.kind }; q = h.p.slice(); if (ortho) { const hz = Math.abs(p[0] - prev[0]) >= Math.abs(p[1] - prev[1]); q = hz ? [h.p[0], prev[1]] : [prev[0], h.p[1]]; snapHit.p = q; } }
-  }
+    const r = (touchR ? 22 : 12) / zoom, h = findSnap(ortho ? q : p, r, exclude);
+    if (h) { snapHit = { p: h.p.slice(), kind: h.kind }; q = h.p.slice(); if (ortho) { const hz = Math.abs(p[0] - prev[0]) >= Math.abs(p[1] - prev[1]); q = hz ? [h.p[0], prev[1]] : [prev[0], h.p[1]]; snapHit.p = q; }
+      else if (st) { // snap wins; keep the straight direction / alignment when the snapped point allows it
+        const k = keepStraight(h, st, prev, r); if (k) { q = k; snapHit.p = k; guide = Object.assign({}, st, { q: k }); } else guide = straightInfo(q, prev, exclude); } }
+    else if (st) guide = st;
+  } else if (st) guide = st;
   showSnapMark(); return q;
 }
 function drawSnapMark(ctx, x, y, kind, s, lw) { ctx.save(); ctx.strokeStyle = '#00c853'; ctx.lineWidth = lw; ctx.beginPath();
@@ -644,7 +651,7 @@ function drawSnapMark(ctx, x, y, kind, s, lw) { ctx.save(); ctx.strokeStyle = '#
   else if (kind === 'mid') { ctx.moveTo(x, y - s); ctx.lineTo(x + s, y + s); ctx.lineTo(x - s, y + s); ctx.closePath(); } else if (kind === 'center') { ctx.arc(x, y, s, 0, 7); }
   else { ctx.moveTo(x - s, y); ctx.lineTo(x, y - s); ctx.lineTo(x + s, y); ctx.lineTo(x, y + s); ctx.closePath(); } ctx.stroke(); ctx.restore(); }
 function showSnapMark() { let g = svg.querySelector('#snapG'); if (!g) { g = el('g', { id: 'snapG', 'pointer-events': 'none' }, svg); } g.innerHTML = '';
-  if (!snapHit) return; const [x, y] = snapHit.p, s = 7 / zoom, w = 2 / zoom, A = { fill: 'none', stroke: '#00c853', 'stroke-width': w };
+  drawGuideSvg(g); if (!snapHit) return; const [x, y] = snapHit.p, s = 7 / zoom, w = 2 / zoom, A = { fill: 'none', stroke: '#00c853', 'stroke-width': w };
   if (snapHit.kind === 'end') el('rect', { ...A, x: x - s, y: y - s, width: 2 * s, height: 2 * s }, g);
   else if (snapHit.kind === 'x') el('path', { ...A, d: `M${x - s} ${y - s}L${x + s} ${y + s}M${x + s} ${y - s}L${x - s} ${y + s}` }, g);
   else if (snapHit.kind === 'mid') el('path', { ...A, d: `M${x} ${y - s}L${x + s} ${y + s}L${x - s} ${y + s}Z` }, g);
@@ -967,3 +974,53 @@ const dtd = document.createElement('dialog'); dtd.id = 'delTypeDlg'; dtd.innerHT
 dtd.addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (!b) return; const t = b.dataset.t, ids = proj.items.filter(i => i.page === page && i.type === t).map(i => i.id);
   if (confirm(`Delete all ${ids.length} ${TYPE_NAMES[t]} items on this page? You can undo this.`)) { dtd.close(); deleteItems(ids, ids.length + ' ' + TYPE_NAMES[t] + ' deleted'); } });
 Object.assign(window.PM, { deleteItems, nearHit }); Object.defineProperty(window.PM, 'selId', { get: () => selId });
+
+// ---- Auto straight: lock near-horizontal / vertical / 45 degree / drawing-angle segments, and align with existing points ----
+const ST_TOL = 5 * Math.PI / 180;
+let domAng = null; // dominant drawing angle (rotated CAD grids), radians in [0, 90deg)
+function dominantAngle() { if (domAng !== null) return domAng; const G = geomCache[page]; if (!G || !G.ready) return 0; domAng = 0; if (!G.cad) return domAng;
+  const { sx } = G.cad, n = sx.length / 4, bins = new Float64Array(90); for (let i = 0; i < n; i++) { const dx = sx[4 * i + 2] - sx[4 * i], dy = sx[4 * i + 3] - sx[4 * i + 1], L = Math.hypot(dx, dy); if (!L) continue; let a = Math.atan2(dy, dx) * 180 / Math.PI; a = ((a % 90) + 90) % 90; bins[Math.round(a) % 90] += L; }
+  let b = 0; for (let i = 1; i < 90; i++) if (bins[i] > bins[b]) b = i; const tot = bins.reduce((x, y) => x + y, 0);
+  if (b > 2 && b < 88 && b !== 45 && bins[b] > 0.25 * tot) domAng = b * Math.PI / 180; return domAng; }
+function straightDirs() { const D = [0, Math.PI / 2, Math.PI / 4, 3 * Math.PI / 4], a = dominantAngle(); if (a) D.push(a, a + Math.PI / 2); return D; }
+function alignPts(exclude, prev) { const out = []; if (!proj) return out; for (const it of proj.items) if (it.page === page) for (const q of it.pts) if (q !== exclude) out.push(q); if (draft) for (const q of draft.pts) if (q !== exclude && q !== prev) out.push(q); return out; }
+function straighten(p, prev, tol, exclude) { const dx = p[0] - prev[0], dy = p[1] - prev[1], L = Math.hypot(dx, dy); if (L < 1e-9) return null;
+  const ang = Math.atan2(dy, dx); let best = null, bd = ST_TOL;
+  for (const d of straightDirs()) { let df = Math.abs(((ang - d) % Math.PI + Math.PI * 1.5) % Math.PI - Math.PI / 2); if (df < bd) { bd = df; best = d; } }
+  const A = alignPts(exclude, prev); let ax = null, ay = null, bx = tol, by = tol;
+  for (const q of A) { if (Math.abs(q[0] - p[0]) < bx) { bx = Math.abs(q[0] - p[0]); ax = q; } if (Math.abs(q[1] - p[1]) < by) { by = Math.abs(q[1] - p[1]); ay = q; } }
+  if (best === null && !ax && !ay) return null;
+  let q = p.slice(), dir = null;
+  if (best !== null) { dir = [Math.cos(best), Math.sin(best)]; const t = dx * dir[0] + dy * dir[1]; q = [prev[0] + t * dir[0], prev[1] + t * dir[1]];
+    const hz = Math.abs(dir[1]) < 1e-6, vt = Math.abs(dir[0]) < 1e-6;
+    if (hz) { ay = null; if (ax) q = [ax[0], prev[1]]; } else if (vt) { ax = null; if (ay) q = [prev[0], ay[1]]; }
+    else if (ax) { q = [ax[0], prev[1] + (ax[0] - prev[0]) / dir[0] * dir[1]]; ay = null; } else if (ay) { q = [prev[0] + (ay[1] - prev[1]) / dir[1] * dir[0], ay[1]]; } }
+  else { if (ax) q[0] = ax[0]; if (ay) q[1] = ay[1]; }
+  if (ax && Math.abs(q[0] - ax[0]) > 1e-9) ax = null; if (ay && Math.abs(q[1] - ay[1]) > 1e-9) ay = null;
+  return { q, prev: prev.slice(), dir, ax, ay, straight: best !== null }; }
+function straightInfo(q, prev, exclude) { const s = straighten(q, prev, 1e-6, exclude); return s && s.straight && Math.hypot(s.q[0] - q[0], s.q[1] - q[1]) < 1e-6 ? s : null; }
+function keepStraight(h, st, prev, r) { // snapped point lies on a drawing line: slide along it to meet the straight ray
+  if (!st.dir) return null; if (h.kind !== 'line') { return Math.hypot(h.p[0] - st.q[0], h.p[1] - st.q[1]) < 1e-6 ? h.p.slice() : null; }
+  const G = geomCache[page]; if (!G || !G.ready) return null; const ray = [prev[0], prev[1], prev[0] + st.dir[0] * 1e7, prev[1] + st.dir[1] * 1e7], ray2 = [prev[0], prev[1], prev[0] - st.dir[0] * 1e7, prev[1] - st.dir[1] * 1e7];
+  for (const i of nearSegs(G, h.p, r).slice(0, 200)) { const sg = G.segs[i]; if (dist(projSeg(h.p, sg), h.p) > 1e-6) continue; const x = segX(ray, sg) || segX(ray2, sg); if (x && dist(x, h.p) <= r) return x; }
+  return null; }
+function guideLines(g, span) { const out = [], q = g.q, R = Math.max(span, 4000 / zoom); if (g.dir) out.push([[q[0] - g.dir[0] * R, q[1] - g.dir[1] * R], [q[0] + g.dir[0] * R, q[1] + g.dir[1] * R]]);
+  if (g.ax) out.push([[g.ax[0], g.ax[1]], [q[0], q[1]]]); if (g.ay) out.push([[g.ay[0], g.ay[1]], [q[0], q[1]]]); return out; }
+function drawGuideSvg(g) { if (!guide || !draft) return; const w = 1.2 / zoom, A = { fill: 'none', stroke: '#2962ff', 'stroke-width': w, 'stroke-dasharray': `${6 / zoom} ${4 / zoom}` };
+  for (const [a, b] of guideLines(guide, 1e5)) el('path', { ...A, d: `M${a[0]} ${a[1]}L${b[0]} ${b[1]}` }, g);
+  const txt = guide.straight ? 'straight' : 'aligned', [x, y] = guide.q, fs = 11 / zoom, bw = (txt.length * 6.2 + 8) / zoom;
+  el('rect', { x: x + 10 / zoom, y: y + 8 / zoom, width: bw, height: 15 / zoom, rx: 3 / zoom, fill: '#2962ff' }, g); const t = el('text', { x: x + 14 / zoom, y: y + 19 / zoom, 'font-size': fs, fill: '#fff', 'font-family': 'sans-serif' }, g); t.textContent = txt;
+  g.dataset.guide = txt; }
+(function () { const b = document.createElement('button'); b.id = 'straightBtn'; b.type = 'button'; b.className = 'btn small' + (straightOn ? ' on' : ''); b.title = 'Auto straight: lock near level / plumb / 45 degree lines and line up with other points. Hold Alt to turn off for a moment';
+  b.innerHTML = '<svg class="ic" viewBox="0 0 24 24"><path d="M3 20h18M4 20V4"/><path d="M8 16l10-10" stroke-dasharray="2 2"/></svg><span class="t">Auto straight</span>'; $('#snapBtn').before(b);
+  b.onclick = () => { straightOn = !straightOn; localStorage.setItem('pm-straight', straightOn ? '1' : '0'); b.classList.toggle('on', straightOn); guide = null; showSnapMark(); toast('Auto straight ' + (straightOn ? 'on' : 'off')); }; })();
+const _ldS = loadDoc; loadDoc = async function (...a) { domAng = null; return _ldS(...a); };
+const _gpS = gotoPage; gotoPage = function (...a) { domAng = null; return _gpS(...a); };
+Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim = (p, prev, alt) => aim(p, { altKey: !!alt, pointerType: 'mouse' }, prev, null); window.PM.domAngle = () => dominantAngle();
+// iOS: stop long-press selection / callout inside the plan area (pinch and pan are handled by pointer events)
+(function () { const v = vpEl, plan = e => !e.target.closest('input,textarea,select,button,label,a,[contenteditable],#empty');
+  v.addEventListener('touchstart', e => { if (plan(e) && e.touches.length === 1) e.preventDefault(); }, { passive: false });
+  v.addEventListener('contextmenu', e => { if (plan(e)) e.preventDefault(); });
+  v.addEventListener('selectstart', e => { if (plan(e)) e.preventDefault(); });
+  const clr = () => { const s = window.getSelection && getSelection(); if (s && s.rangeCount && !(document.activeElement && document.activeElement.matches('input,textarea'))) s.removeAllRanges(); };
+  document.addEventListener('touchend', clr, { passive: true }); document.addEventListener('touchcancel', clr, { passive: true }); })();
