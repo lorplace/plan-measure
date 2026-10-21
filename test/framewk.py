@@ -8,7 +8,7 @@ def summ(a):
     a = sorted(a); n = len(a)
     return {'frames': n, 'avg_ms': round(sum(a)/n, 1) if n else None, 'p95_ms': round(a[int(n*0.95)-1], 1) if n else None, 'max_ms': round(a[-1], 1) if n else None, 'janky_over_50ms': sum(1 for x in a if x > 50)}
 with sync_playwright() as pw:
-    b = pw.webkit.launch(); ctx = b.new_context(**pw.devices['iPhone 13']); pg = ctx.new_page(); pg.set_default_timeout(300000); pg.add_init_script('const _spc=Element.prototype.setPointerCapture;Element.prototype.setPointerCapture=function(i){try{_spc.call(this,i)}catch(e){}};const _rpc=Element.prototype.releasePointerCapture;Element.prototype.releasePointerCapture=function(i){try{_rpc.call(this,i)}catch(e){}}')
+    b = pw.webkit.launch(); ctx = b.new_context(**pw.devices['iPhone 13']); pg = ctx.new_page(); pg.on('dialog', lambda d: d.accept()); pg.set_default_timeout(300000); pg.add_init_script('const _spc=Element.prototype.setPointerCapture;Element.prototype.setPointerCapture=function(i){try{_spc.call(this,i)}catch(e){}};const _rpc=Element.prototype.releasePointerCapture;Element.prototype.releasePointerCapture=function(i){try{_rpc.call(this,i)}catch(e){}}')
     pg.goto(URL); pg.set_input_files('#file', F); pg.wait_for_function('window.PM && PM.doc && (PM.doc.cad || PM.doc.pdf)'); pg.wait_for_timeout(4000)
     out = {}
     box = pg.locator('#viewport').bounding_box(); cx, cy = box['x'] + box['width']/2, box['y'] + box['height']/2

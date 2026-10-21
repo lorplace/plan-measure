@@ -15,7 +15,7 @@ def sampler():
         marks[peak['phase']] = max(marks.get(peak['phase'], 0), s); time.sleep(0.05)
 ok = True
 with sync_playwright() as pw:
-    b = pw.webkit.launch(); ctx = b.new_context(**pw.devices['iPhone 13']); pg = ctx.new_page(); errs = []
+    b = pw.webkit.launch(); ctx = b.new_context(**pw.devices['iPhone 13']); pg = ctx.new_page(); pg.on('dialog', lambda d: d.accept()); errs = []
     pg.on('pageerror', lambda e: errs.append(str(e)))
     threading.Thread(target=sampler, daemon=True).start()
     peak['phase'] = 'start'; pg.goto(URL); pg.wait_for_timeout(1000)
