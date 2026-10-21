@@ -35,6 +35,7 @@ Everything runs on your device. Files are opened locally in the browser and proj
 **Takeoff tools**
 - Length, pipe run (polyline), area with perimeter, fixture counts with labels and colours, text notes
 - Sleeve tool: size, label and note; X/Y from a user-set origin; automatic offsets to the nearest walls or gridlines
+- Delete: tap a markup with Select (generous touch area) for a floating Edit / Delete bar; trash button or swipe left on list rows; delete a sleeve size from the Sleeve count panel; Clear page and Delete all of a type in the menu; Delete key and a trash button in the top bar on desktop. Every delete can be undone (Undo button in the message)
 - Phone-friendly loading: DWG/DXF files are read in a Web Worker that is closed afterwards, geometry is kept as compact typed arrays, only the visible part of the plan is rendered (tiled, level of detail), and zoom/pan move the existing image until the gesture ends
 - Project file (.pmproj): save plan geometry plus markups on a computer and open it on a phone without converting the DWG again
 - Sleeve count: one tap (phone tool bar or desktop top bar) shows total sleeves and counts by size, layer and level, with Find sleeves and sleeve CSV export right there
@@ -92,7 +93,7 @@ python3 -m http.server 8766 &
 python3 test/e2e.py                                  # starts its own server
 python3 test/make_find_dxf.py   # sample DXF with sleeve blocks, circles and decoys
 python3 test/make_revit_dxf.py  # synthetic Revit-style export (far-from-origin link blocks, mirrored families, stray entity, missing xref)
-for t in phone loupe undo snap cad find revit count webkit pmproj; do python3 test/$t.py http://127.0.0.1:8766/; done
+for t in phone loupe undo snap cad find revit count webkit pmproj heights delete; do python3 test/$t.py http://127.0.0.1:8766/; done
 ```
 
 The tests launch Chrome from `/usr/bin/google-chrome`; change `executable_path` in the scripts if yours is elsewhere. The DWG checks in `test/cad.py` expect sample files from the LibreDWG test data (`example_2018.dwg`, `example_r14.dwg`) in `/tmp` as `ex_2018.dwg` and `ex_r14.dwg`.

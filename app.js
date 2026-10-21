@@ -175,7 +175,7 @@ $('#eColor').addEventListener('input', e => { const it = selItem(); if (it) { it
 $('#eText').addEventListener('input', e => { const it = selItem(); if (it) { it.text = e.target.value; changed(); } });
 $('#eExtra').addEventListener('change', e => { const it = selItem(); if (!it) return; const v = e.target.value.trim() ? Units.parseLength(e.target.value, proj.units) : 0; if (isNaN(v)) return toast('Could not read that length'); it.extra = v; changed(); });
 $('#eDel').addEventListener('click', deleteSel);
-function deleteSel() { if (!selId) return; proj.items = proj.items.filter(i => i.id !== selId); selId = null; changed(); }
+function deleteSel() { if (!selId) return; const it = selItem(); deleteItems([selId], (it ? TYPE_NAMES[it.type] : 'Item') + ' deleted'); }
 function changed() { draw(); persistSoon(); commitSoon(); }
 
 // ---------- navigation & zoom ----------
@@ -252,7 +252,8 @@ vpEl.addEventListener('pointerdown', e => {
   if (tool === 'select') {
     const h = e.target.closest('.handle'), g = e.target.closest('g[data-id]');
     if (h && selId) { gesture.kind = 'vertex'; gesture.v = +h.dataset.v; return; }
-    if (g && g.dataset.id) { selId = g.dataset.id; const it = selItem(); gesture.kind = 'move'; gesture.orig = it.pts.map(q => q.slice()); draw(); return; }
+    const gid = g && g.dataset.id ? g.dataset.id : nearHit(p, (e.pointerType === 'mouse' ? 8 : 24) / zoom);
+    if (gid) { selId = gid; const it = selItem(); gesture.kind = 'move'; gesture.orig = it.pts.map(q => q.slice()); draw(); return; }
     gesture.kind = 'pan'; gesture.desel = true;
   }
 });
@@ -461,7 +462,7 @@ document.addEventListener('click', e => { if (!e.target.closest('#moreMenu,#more
 $('#moreMenu').addEventListener('click', e => { const b = e.target.closest('[data-proxy]'); if (!b) return; $('#moreMenu').hidden = true; $(b.dataset.proxy).click(); });
 $('#units2').addEventListener('change', e => { $('#units').value = e.target.value; $('#units').dispatchEvent(new Event('change')); });
 $('#scaleInfo').onclick = () => $('#scaleBtn').click();
-$('#sheetHandle').onclick = () => { document.body.classList.toggle('sheetopen'); updateSheet(); };
+$('#sheetHandle').onclick = () => { document.body.classList.toggle('sheetopen'); updateSheet(); placeSelBar(); };
 function updateSheet() { if (!proj) return; const g = groups(); $('#units2').value = proj.units;
   $('#sheetSum').textContent = g.length ? g.slice(0, 3).map(x => (x.label || TYPE_NAMES[x.type]) + ' ' + fmtGroup(x)).join('  |  ') + (g.length > 3 ? '  ...' : '') : 'Takeoff: no items yet';
   $('.chev').textContent = document.body.classList.contains('sheetopen') ? 'Hide' : 'Show'; }
@@ -915,3 +916,54 @@ async function openPmproj(f) {
   catch (err) { console.error(err); toast('Could not open the project file: ' + err.message, 8000); } }
 $('#pmprojBtn').onclick = async () => { if (!proj || !doc) return toast('Open a plan first.'); toast('Building project file...', 20000); const b = await buildPmproj(); download(b, (proj.name || 'project') + '.pmproj', 'application/octet-stream'); toast('Saved ' + (b.size / 1e6).toFixed(1) + ' MB project file'); };
 Object.assign(window.PM, { buildPmproj });
+
+// ---- Delete: hit test with a generous touch area, floating action bar, list trash/swipe, bulk delete, Undo toast ----
+function segD(p, a, b) { const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy; let t = L ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L : 0; t = Math.max(0, Math.min(1, t)); return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy); }
+function nearHit(p, tol) { if (!proj) return null; let best = null, bd = tol;
+  for (const it of proj.items) { if (it.page !== page || !it.pts || !it.pts.length) continue; const P = it.pts; let d = Infinity;
+    if (P.length === 1 || it.type === 'count' || it.type === 'sleeve' || it.type === 'text' || it.type === 'origin') for (const q of P) d = Math.min(d, Math.hypot(q[0] - p[0], q[1] - p[1]));
+    else { for (let i = 1; i < P.length; i++) d = Math.min(d, segD(p, P[i - 1], P[i])); if (it.type === 'area') { d = Math.min(d, segD(p, P[P.length - 1], P[0])); if (P.length > 2 && inPoly(P, p[0], p[1])) d = Math.min(d, tol * 0.99); } }
+    if (d < bd) { bd = d; best = it.id; } }
+  return best; }
+function deleteItems(ids, msg) { if (!proj || !ids.length) return; commitHist(); const S = new Set(ids); proj.items = proj.items.filter(i => !S.has(i.id)); if (S.has(selId)) selId = null; commitHist(); draw(); persistSoon(); undoToast(msg || (ids.length + ' items deleted')); }
+const undoT = document.createElement('div'); undoT.id = 'undoToast'; undoT.hidden = true; undoT.innerHTML = '<span></span><button type="button" class="btn small" id="undoToastBtn">Undo</button>'; document.body.appendChild(undoT);
+function undoToast(msg) { undoT.querySelector('span').textContent = msg; undoT.hidden = false; clearTimeout(undoT._h); undoT._h = setTimeout(() => undoT.hidden = true, 6000); }
+$('#undoToastBtn').onclick = () => { undoT.hidden = true; undo(); };
+const TRASH = '<svg class="ic" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>';
+// floating action bar near the selected markup
+const selBar = document.createElement('div'); selBar.id = 'selBar'; selBar.hidden = true;
+selBar.innerHTML = `<button type="button" class="btn" id="selEdit">Edit</button><button type="button" class="btn danger" id="selDel">${TRASH}Delete</button>`; document.body.appendChild(selBar);
+function placeSelBar() { const it = selItem(); if (!it || (document.body.classList.contains('sheetopen') && matchMedia('(max-width: 800px)').matches) || tool !== 'select' || draft || it.page !== page || !it.pts || !it.pts.length) { selBar.hidden = true; return; }
+  const r = svg.getBoundingClientRect(), xs = it.pts.map(q => r.left + q[0] * zoom), ys = it.pts.map(q => r.top + q[1] * zoom), v = vpEl.getBoundingClientRect();
+  selBar.hidden = false; const w = selBar.offsetWidth || 190, h = selBar.offsetHeight || 48;
+  let x = (Math.min(...xs) + Math.max(...xs)) / 2 - w / 2, y = Math.min(...ys) - h - 18; if (y < v.top + 4) y = Math.max(...ys) + 18;
+  x = Math.max(v.left + 4, Math.min(x, v.right - w - 4)); y = Math.max(v.top + 4, Math.min(y, v.bottom - h - 4)); selBar.style.left = x + 'px'; selBar.style.top = y + 'px'; }
+$('#selDel').onclick = deleteSel;
+$('#selEdit').onclick = () => { if (matchMedia('(max-width: 800px)').matches) { document.body.classList.add('sheetopen'); try { updateSheet(); } catch (e) { } } $('#edit').scrollIntoView({ block: 'nearest' }); };
+vpEl.addEventListener('scroll', () => { if (!selBar.hidden) placeSelBar(); }, { passive: true });
+// top bar trash button (desktop)
+const delBtn = document.createElement('button'); delBtn.id = 'delBtn'; delBtn.className = 'btn icon danger'; delBtn.title = 'Delete selected (Delete key)'; delBtn.innerHTML = TRASH; delBtn.hidden = true; $('#redoBtn').after(delBtn); delBtn.onclick = deleteSel;
+// list rows: trash button + swipe left on touch
+const _renderListD = renderList; renderList = function () { _renderListD(); if (!proj) return;
+  document.querySelectorAll('#list .row').forEach(r => { const b = document.createElement('button'); b.type = 'button'; b.className = 'rdel'; b.title = 'Delete'; b.setAttribute('aria-label', 'Delete'); b.innerHTML = TRASH; r.appendChild(b); });
+  delBtn.hidden = !selItem(); placeSelBar(); };
+$('#list').addEventListener('click', e => { const b = e.target.closest('.rdel'); if (!b) return; e.stopPropagation(); const r = b.closest('.row'), it = proj.items.find(i => i.id === r.dataset.id); if (it) deleteItems([it.id], TYPE_NAMES[it.type] + ' deleted'); }, true);
+let sw = null;
+$('#list').addEventListener('pointerdown', e => { const r = e.target.closest('.row'); if (r && e.pointerType !== 'mouse') sw = { r, x: e.clientX, y: e.clientY }; });
+$('#list').addEventListener('pointermove', e => { if (!sw) return; const dx = e.clientX - sw.x; if (Math.abs(e.clientY - sw.y) > 30) { sw.r.style.transform = ''; sw = null; return; } if (dx < 0) sw.r.style.transform = `translateX(${Math.max(dx, -120)}px)`; });
+const swEnd = e => { if (!sw) return; const r = sw.r, dx = e.clientX - sw.x; sw = null; r.style.transform = ''; if (dx < -70) { const it = proj.items.find(i => i.id === r.dataset.id); if (it) deleteItems([it.id], TYPE_NAMES[it.type] + ' deleted'); } };
+$('#list').addEventListener('pointerup', swEnd); $('#list').addEventListener('pointercancel', () => { if (sw) sw.r.style.transform = ''; sw = null; });
+// sleeve panel: delete all sleeves of one size
+const _renderSCD = renderSleeveCount; renderSleeveCount = function () { _renderSCD(); const t = document.querySelector('#slvBody table'); if (!t) return;
+  t.querySelectorAll('tr').forEach((tr, i) => { if (!i) { tr.appendChild(document.createElement('th')); return; } const k = tr.cells[0].textContent, td = tr.insertCell(); td.innerHTML = `<button type="button" class="rdel" data-size="${esc(k)}" title="Delete these sleeves" aria-label="Delete ${esc(k)} sleeves">${TRASH}</button>`; }); };
+$('#slvBody').addEventListener('click', e => { const b = e.target.closest('.rdel'); if (!b) return; e.preventDefault(); const k = b.dataset.size, ids = proj.items.filter(i => i.type === 'sleeve' && (i.size || 'No size') === k).map(i => i.id);
+  if (!ids.length || !confirm(`Delete all ${ids.length} sleeve${ids.length > 1 ? 's' : ''} of size ${k}? You can undo this.`)) return; deleteItems(ids, ids.length + ' sleeves deleted'); renderSleeveCount(); });
+// menu: Clear page / Delete all of a type
+(function () { const m = $('#moreMenu'), mk = (id, txt) => { const b = document.createElement('button'); b.className = 'btn danger'; b.id = id; b.innerHTML = TRASH + txt; m.appendChild(b); return b; };
+  mk('clearPageBtn', 'Clear page').onclick = () => { if (!proj) return; m.hidden = true; const ids = proj.items.filter(i => i.page === page).map(i => i.id); if (!ids.length) return toast('Nothing on this page.'); if (confirm(`Delete all ${ids.length} items on this page? You can undo this.`)) deleteItems(ids, ids.length + ' items deleted'); };
+  mk('delTypeBtn', 'Delete all of a type').onclick = () => { if (!proj) return; m.hidden = true; const c = {}; proj.items.filter(i => i.page === page).forEach(i => c[i.type] = (c[i.type] || 0) + 1); const ks = Object.keys(c); if (!ks.length) return toast('Nothing on this page.');
+    const d = $('#delTypeDlg'); d.querySelector('.list').innerHTML = ks.map(k => `<button type="button" class="btn danger" data-t="${k}">${TRASH}${TYPE_NAMES[k]} (${c[k]})</button>`).join(''); d.showModal(); }; })();
+const dtd = document.createElement('dialog'); dtd.id = 'delTypeDlg'; dtd.innerHTML = '<form method="dialog"><h3>Delete all of a type (this page)</h3><div class="list"></div><div class="frow"><button class="btn" value="cancel">Cancel</button></div></form>'; document.body.appendChild(dtd);
+dtd.addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (!b) return; const t = b.dataset.t, ids = proj.items.filter(i => i.page === page && i.type === t).map(i => i.id);
+  if (confirm(`Delete all ${ids.length} ${TYPE_NAMES[t]} items on this page? You can undo this.`)) { dtd.close(); deleteItems(ids, ids.length + ' ' + TYPE_NAMES[t] + ' deleted'); } });
+Object.assign(window.PM, { deleteItems, nearHit }); Object.defineProperty(window.PM, 'selId', { get: () => selId });
