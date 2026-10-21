@@ -2,3 +2,6 @@ test/out-*
 node_modules
 .wrangler
 test/sample-scan*.png
+# private client drawings never go in the repo
+*.dwg
+plan-measure-userfiles/

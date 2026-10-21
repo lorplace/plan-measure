@@ -23,7 +23,7 @@ Everything runs on your device. Files are opened locally in the browser and proj
 ## Features
 
 **Plans**
-- Open PDF (multi-page), PNG/JPG, DXF and DWG files entirely client-side
+- Open PDF (multi-page), PNG/JPG, DXF and DWG files entirely client-side; also renders Revit-style exports (geometry inside link blocks, mirrored families, HATCH outlines) and fits the view to the main drawing, ignoring stray far-away entities
 - Zoom, pan, pinch-zoom and two-finger pan; fit to page; page navigation
 - CAD layer list with on/off toggles; true scale read from the drawing units (`$INSUNITS`), with a manual override for unitless drawings
 
@@ -35,7 +35,8 @@ Everything runs on your device. Files are opened locally in the browser and proj
 **Takeoff tools**
 - Length, pipe run (polyline), area with perimeter, fixture counts with labels and colours, text notes
 - Sleeve tool: size, label and note; X/Y from a user-set origin; automatic offsets to the nearest walls or gridlines
-- Find sleeves (CAD): detects sleeves already drawn in DXF/DWG files from block names, layers and circles matching sleeve keywords (SLEEVE, SLV, PEN, CORE, MANCHON, FOURREAU and more), or from one symbol you pick; reads size from block attributes, nearby text or circle diameter; handles nested, rotated and scaled blocks; review list grouped by size with include/exclude, then adds them as numbered sleeves in one undoable step without duplicates
+- Sleeve count: one tap (phone tool bar or desktop top bar) shows total sleeves and counts by size, layer and level, with Find sleeves and sleeve CSV export right there
+- Find sleeves (CAD): detects sleeves already drawn in DXF/DWG files from block names, layers and circles matching sleeve keywords (SLEEVE, SLV, PEN, CORE, MANCHON, FOURREAU and more), or from one symbol you pick; reads size from block attributes, nearby text or circle diameter; handles nested, rotated and scaled blocks; reads sizes written in block names (e.g. SLV_Round_FLR_4) and ignores view names that exporters append to every block; review list grouped by size with include/exclude, then adds them as numbered sleeves in one undoable step without duplicates
 - Takeoff panel with totals per type, label and colour
 - Select, move, edit and delete markups; drag individual points
 
@@ -88,7 +89,8 @@ python3 test/make_dxf.py      # sample DXF plans in feet, mm and unitless
 python3 -m http.server 8766 &
 python3 test/e2e.py                                  # starts its own server
 python3 test/make_find_dxf.py   # sample DXF with sleeve blocks, circles and decoys
-for t in phone loupe undo snap cad find; do python3 test/$t.py http://127.0.0.1:8766/; done
+python3 test/make_revit_dxf.py  # synthetic Revit-style export (far-from-origin link blocks, mirrored families, stray entity, missing xref)
+for t in phone loupe undo snap cad find revit count; do python3 test/$t.py http://127.0.0.1:8766/; done
 ```
 
 The tests launch Chrome from `/usr/bin/google-chrome`; change `executable_path` in the scripts if yours is elsewhere. The DWG checks in `test/cad.py` expect sample files from the LibreDWG test data (`example_2018.dwg`, `example_r14.dwg`) in `/tmp` as `ex_2018.dwg` and `ex_r14.dwg`.

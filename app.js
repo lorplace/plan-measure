@@ -44,7 +44,7 @@ async function onFile(e) { const f = e.target.files[0]; if (!f) return; e.target
     return toast(fileMime(f) === 'application/dwg' ? 'Could not read this DWG (' + err.message + '). Save it as DXF from your CAD program, or convert it free with ODA File Converter, then open the DXF.' : 'Could not open file: ' + err.message, 10000); }
   proj = { id: uid(), name: f.name.replace(/\.[^.]+$/, ''), fileName: f.name, fileType: doc.mime, units: $('#units').value, scales: {}, items: [], origins: {}, hidden: {} };
   let msg = 'Opened ' + f.name + '. Set the scale before measuring.';
-  if (doc.type === 'cad') { if (doc.cad.unitM) { proj.scales[1] = doc.cad.unitM / doc.cad.k; proj.scaleNames = { 1: 'CAD units: ' + doc.cad.unitName }; msg = 'Opened ' + f.name + ' (' + doc.cad.unitName + '). True scale set from the drawing.'; } else msg = 'Opened ' + f.name + '. Drawing has no units: choose them in Set scale.'; }
+  if (doc.type === 'cad') { if (doc.cad.unitM) { proj.scales[1] = doc.cad.unitM / doc.cad.k; proj.scaleNames = { 1: 'CAD units: ' + doc.cad.unitName }; msg = 'Opened ' + f.name + ' (' + doc.cad.unitName + '). True scale set from the drawing.'; } else msg = 'Opened ' + f.name + '. Drawing has no units: choose them in Set scale.';  if (doc.cad.xrefs && doc.cad.xrefs.length) msg += ' Missing external references (not in this file): ' + doc.cad.xrefs.slice(0, 3).join(', ') + (doc.cad.xrefs.length > 3 ? ' and ' + (doc.cad.xrefs.length - 3) + ' more' : '') + '. Bind them in your CAD program to see them.'; }
   page = 1; resetHist(); fitPage(); renderLayers(); await persist(); toast(msg, 5000);
 }
 $('#file').addEventListener('change', onFile);
@@ -709,18 +709,27 @@ function parseSize(s) { // returns size label or null
 function sizeFromDia(rPage) { const s = scaleOf(page); if (!s || !rPage) return { size: '', raw: '' }; const dm = 2 * rPage * s, din = dm / Units.IN;
   const raw = proj.units === 'met' ? 'Ø ' + (dm * 1000).toFixed(0) + ' mm' : 'Ø ' + din.toFixed(2) + '"'; let best = NOMINAL_IN[0]; for (const n of NOMINAL_IN) if (Math.abs(n - din) < Math.abs(best - din)) best = n; return { size: inStr(best), raw }; }
 function nearText(x, y, R) { let best = null, bd = R; for (const t of doc.cad.texts) { if ((proj.hidden || {})[doc.cad.layerNames[t.L]]) continue; const d = Math.hypot(t.x - x, t.y - y); if (d <= bd) { const sz = parseSize(t.text); if (sz) { bd = d; best = sz; } } } return best; }
-function candSize(c) { // attributes > nearby text > diameter
+// size written in a block name, e.g. "SLV_Round_FLR_4", "Sleeve 3in", "PEN-100mm" (only for unscaled inserts)
+function sizeFromName(n) { n = String(n || ''); const p = parseSize(n); if (p) return p; const t = n.split(/[^0-9.\/-]+/).filter(Boolean).pop(); if (!t || !/^\d+(?:\.\d+)?$/.test(t)) return null; const v = +t; return NOMINAL_IN.includes(v) && /[_\s-]\d+(?:\.\d+)?[_\s-]*$/.test(n) ? inStr(v) : null; }
+function candSize(c) { // attributes > size in block name > nearby text > diameter
   const dia = sizeFromDia(c.r); let size = null, src = '';
   if (c.attrs) { const pref = c.attrs.slice().sort((a, b) => (/SIZE|DIA|TAILLE|DIAM/i.test(b.tag) ? 1 : 0) - (/SIZE|DIA|TAILLE|DIAM/i.test(a.tag) ? 1 : 0) || (a.def ? 1 : 0) - (b.def ? 1 : 0));
     for (const a of pref) { const s = parseSize(a.value); if (s) { size = s; src = a.def ? 'block default' : 'attribute'; break; } } }
+  if (!size && c.kind === 'insert' && Math.abs((c.sc ?? 1) - 1) < 0.01) { const s = sizeFromName(c.name); if (s) { size = s; src = 'block name'; } }
   if (!size) { const R = Math.max(4 * (c.r || 0), 0.015 * Math.min(doc.cad.w, doc.cad.h)); const t = nearText(c.x, c.y, R); if (t) { size = t; src = 'nearby text'; } }
   if (!size && dia.size) { size = dia.size; src = 'diameter'; }
   return { size: size || '?', src: src || 'unknown', raw: dia.raw }; }
+// Revit and some exporters append the same view name to every block name (e.g. "... - SLAB SLEEVING LAYOUT"); strip it before keyword matching
+function commonSuffix(M) { if (M._sfx != null) return M._sfx; const names = [...new Set(M.inserts.map(s => s.name))]; let best = '';
+  if (names.length >= 5) for (const seed of names.slice(0, 20)) for (let L = Math.max(6, best.length + 1); L <= seed.length - 1; L++) { const sx = seed.slice(-L); let n = 0; for (const x of names) if (x.endsWith(sx)) n++; if (n >= 0.6 * names.length) best = sx; else break; }
+  return (M._sfx = best); }
+function shortName(n, sfx, tidy) { n = String(n || ''); if (sfx && n.endsWith(sfx) && n.length > sfx.length) n = n.slice(0, -sfx.length); if (tidy) n = n.replace(/[-_ ]+V?\d{3,}[-_ ]*$/, '').replace(/[-_ ]+$/, ''); return n; }
 function findCandidates(mode, pick) {
   const M = doc.cad, hid = proj.hidden || {}, out = [], vis = L => !hid[M.layerNames[L]];
   const insOK = new Set();
-  M.inserts.forEach((s, i) => { if (!vis(s.L)) return; const ok = mode === 'pick' ? (pick.kind === 'insert' && s.name === pick.name) : (slvMatch(s.name) || slvMatch(M.layerNames[s.L]));
-    if (ok && !s.parents.some(p => insOK.has(p))) { insOK.add(i); out.push({ kind: 'insert', x: s.x, y: s.y, r: s.r, name: s.name, L: s.L, attrs: s.attrs }); } });
+  const sfx = commonSuffix(M); M._sfx = sfx;
+  M.inserts.forEach((s, i) => { if (!vis(s.L)) return; const ok = mode === 'pick' ? (pick.kind === 'insert' && s.name === pick.name) : (slvMatch(shortName(s.name, sfx)) || slvMatch(M.layerNames[s.L]));
+    if (ok && !s.parents.some(p => insOK.has(p))) { insOK.add(i); out.push({ kind: 'insert', x: s.x, y: s.y, r: s.r, sc: s.sc, name: shortName(s.name, sfx, true), full: s.name, L: s.L, attrs: s.attrs }); } });
   M.circles.forEach(c => { if (!vis(c.L) || c.parents.some(p => insOK.has(p))) return;
     const ok = mode === 'pick' ? (pick.kind === 'circle' && c.L === pick.L && Math.abs(c.r - pick.r) <= pick.r * 0.01) : slvMatch(M.layerNames[c.L]);
     if (ok) out.push({ kind: 'circle', x: c.x, y: c.y, r: c.r, name: '', L: c.L }); });
@@ -757,7 +766,7 @@ $('#findNone').onclick = () => { FS.cands.forEach(c => c.on = false); renderFind
 $('#findCancel').onclick = endFind;
 $('#findPick').onclick = () => { document.body.classList.add('pickmode'); setTool('select'); toast('Click one sleeve symbol (block or circle) on the plan.', 5000); };
 $('#findAdd').onclick = () => { const add = FS.cands.filter(c => c.on && !c.dup); if (!add.length) return;
-  for (const c of add) proj.items.push({ id: uid(), type: 'sleeve', page, pts: [[c.x, c.y]], color: $('#color').value, label: '', size: c.size === '?' ? '' : c.size, text: [c.name ? 'Block ' + c.name : 'Circle', 'layer ' + c.layer, c.raw].filter(Boolean).join(', '), src: 'auto' });
+  for (const c of add) proj.items.push({ id: uid(), type: 'sleeve', page, pts: [[c.x, c.y]], color: $('#color').value, label: '', size: c.size === '?' ? '' : c.size, layer: c.layer, text: [c.name ? 'Block ' + c.name : 'Circle', 'layer ' + c.layer, c.raw].filter(Boolean).join(', '), src: 'auto' });
   changed(); toast(`Added ${add.length} sleeve${add.length > 1 ? 's' : ''}. Undo removes them in one step.`, 5000); endFind(); };
 $('#findBtn').onclick = () => startFind('auto');
 // pick-one: next click on the plan selects nearest insert or circle
@@ -774,3 +783,22 @@ const _draw5 = draw; draw = function () { _draw5(); if (!FS) return; const g = e
     el('circle', { cx: c.x, cy: c.y, r: hot ? r * 1.6 : r, fill: c.on ? '#ff6d00' : 'none', 'fill-opacity': 0.25, stroke: c.dup ? '#9e9e9e' : c.on ? '#ff6d00' : '#607d8b', 'stroke-width': (hot ? 3.5 : 2.5) / zoom, 'stroke-dasharray': c.on ? '' : `${4 / zoom} ${3 / zoom}` }, g); } };
 const _renderList2 = renderList; renderList = function () { _renderList2(); const it = proj && proj.items.find(i => i.id === selId); if (it && it.type === 'sleeve' && it.size && ![...$('#eSize').options].some(o => o.value === it.size)) { const o = document.createElement('option'); o.textContent = it.size; $('#eSize').appendChild(o); $('#eSize').value = it.size; } };
 Object.assign(window.PM, { findCandidates, startFind, get FS() { return FS; } }); Object.defineProperty(window.PM, 'FS', { get: () => FS });
+
+// ---- Sleeve count panel ----
+function sleeveCounts() {
+  const S = proj ? proj.items.filter(i => i.type === 'sleeve') : [], tally = f => { const m = new Map(); for (const s of S) { const k = f(s); m.set(k, (m.get(k) || 0) + 1); } return [...m.entries()].sort((a, b) => String(a[0]).localeCompare(String(b[0]), undefined, { numeric: true })); };
+  const layerOf = s => s.layer || ((/layer ([^,]+)/.exec(s.text || '') || [])[1]) || 'Placed by hand';
+  const levelOf = s => doc && doc.type === 'cad' ? (proj.name || 'Drawing') : 'Page ' + s.page;
+  return { total: S.length, bySize: tally(s => s.size || 'No size'), byLayer: tally(layerOf), byLevel: tally(levelOf) };
+}
+function renderSleeveCount() {
+  const c = sleeveCounts(), isCad = doc && doc.type === 'cad', tbl = (title, head, rows) => `<h4>${title}</h4><table><tr><th>${head}</th><th class="n">Count</th></tr>` + rows.map(([k, n]) => `<tr><td>${esc(String(k))}</td><td class="n">${n}</td></tr>`).join('') + '</table>';
+  $('#slvBody').innerHTML = c.total ? `<div class="total" id="slvTotal">${c.total}</div><small>sleeve${c.total > 1 ? 's' : ''} in total</small>` + tbl('By size', 'Size', c.bySize) + tbl('By layer', 'Layer', c.byLayer) + (c.byLevel.length > 1 || !isCad ? tbl('By level / page', 'Level', c.byLevel) : '')
+    : `<div class="total" id="slvTotal">0</div><p class="empty">No sleeves placed yet. ${isCad ? 'Use Find sleeves to pick up sleeves drawn in this CAD file, or place them with the Sleeve tool.' : 'Place them with the Sleeve tool.'}</p>`;
+  $('#slvFind').hidden = !isCad; $('#slvFind').classList.toggle('primary', isCad && !c.total); $('#slvCsv').disabled = !c.total;
+}
+function openSleeveCount() { if (!proj) return toast('Open a plan first.'); renderSleeveCount(); const d = $('#slvDlg'); if (!d.open) d.showModal(); }
+$('#slvCountBtn').onclick = openSleeveCount; $('#slvCountTool').onclick = openSleeveCount;
+$('#slvFind').onclick = () => { $('#slvDlg').close(); startFind('auto'); };
+$('#slvCsv').onclick = () => $('#sleeveCsvBtn').click();
+Object.assign(window.PM, { sleeveCounts });

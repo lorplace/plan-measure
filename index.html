@@ -20,6 +20,7 @@
   <select id="units" title="Units"><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select>
   <span class="sep"></span>
   <span class="grow"></span><button id="csvBtn" class="btn" data-icon="table">Export CSV</button>
+  <button id="slvCountBtn" class="btn" data-icon="count" title="Sleeve count: totals by size and layer">Sleeve count</button>
   <button id="findBtn" class="btn" data-icon="find" title="Find sleeves drawn in the CAD file">Find sleeves</button>
   <button id="sleeveCsvBtn" class="btn" data-icon="sleeve" title="Export sleeve schedule CSV">Sleeves CSV</button>
   <button id="pdfBtn" class="btn" data-icon="download">Export PDF</button>
@@ -28,6 +29,7 @@
 </header>
 <nav id="tools">
   <button data-tool="select" data-icon="select" class="tool active" title="Select / edit (V)">Select</button>
+  <button id="slvCountTool" class="tool" data-icon="count" title="Sleeve count">Sleeves</button>
   <button data-tool="pan" data-icon="hand" class="tool" title="Pan (H)">Pan</button>
   <button data-tool="calibrate" data-icon="cal" class="tool" title="Calibrate scale with 2 points (K)">Calibrate</button>
   <button data-tool="line" data-icon="line" class="tool" title="Length (L)">Length</button>
@@ -83,6 +85,11 @@
     </div>
   </aside>
 </main>
+<dialog id="slvDlg"><form method="dialog">
+  <h3>Sleeve count</h3>
+  <div id="slvBody"></div>
+  <menu><button type="button" id="slvFind" class="btn">Find sleeves</button><button type="button" id="slvCsv" class="btn">Export sleeves CSV</button><button value="cancel" class="btn primary">Close</button></menu>
+</form></dialog>
 <dialog id="scaleDlg"><form method="dialog">
   <h3>Set scale for this page</h3>
   <p>Choose a standard scale, or use the Calibrate tool to click two points of a known distance.</p>

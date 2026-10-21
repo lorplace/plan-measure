@@ -173,3 +173,17 @@ body.pickmode #viewport{cursor:copy}
 #bar .btn{white-space:nowrap}
 @media (min-width:701px) and (max-width:1750px){#csvBtn .t,#sleeveCsvBtn .t,#findBtn .t,#pdfBtn .t{display:none}}
 .fbot{position:sticky;bottom:0;background:#fff8f1;padding:6px 0;margin-bottom:0;border-top:1px solid #f0d9c4}
+
+/* sleeve count */
+#slvCountTool{display:none}
+@media (max-width:700px){#slvCountTool{display:flex}#slvCountBtn{display:none}}
+@media (min-width:701px) and (max-width:1750px){#slvCountBtn .t{display:none}}
+#slvDlg{max-width:min(520px,94vw);width:520px}
+#slvDlg .total{font-size:28px;font-weight:700;margin:4px 0 2px}
+#slvDlg table{width:100%;border-collapse:collapse;margin:6px 0 12px;font-size:14px}
+#slvDlg th,#slvDlg td{text-align:left;padding:6px 4px;border-bottom:1px solid #e0e0e0}
+#slvDlg td.n,#slvDlg th.n{text-align:right;font-variant-numeric:tabular-nums}
+#slvDlg h4{margin:10px 0 0;font-size:13px;text-transform:uppercase;color:#546e7a}
+#slvDlg menu{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;padding:0}
+#slvDlg .empty{color:#546e7a}
+#slvBody{max-height:60vh;overflow:auto}
