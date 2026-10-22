@@ -1,120 +1,121 @@
 # Plan Measure
 
-A free, browser-only plan viewer and takeoff tool for the trades: open PDF, image, DXF and DWG plans, set the scale, and measure, count and lay out sleeves without uploading anything.
+Plan Measure is a free browser app for construction takeoffs. Open a PDF or a DXF/DWG plan, set the scale, and measure lengths, areas, counts, pipe runs and sleeves. Files stay on the device: there is no account, upload or server.
 
-**Live app:** https://plan-measure.pages.dev
+**Live demo:** https://plan-measure.pages.dev
 
-Everything runs on your device. Files are opened locally in the browser and projects are saved in the browser's own storage. There is no server, account or paid service.
-
-## Screenshots
-
-| Desktop takeoff | Phone |
-| --- | --- |
-| ![Desktop takeoff with lengths, area, pipe run and fixture counts](shots/desktop-1920.png) | ![Phone layout with bottom tool bar and takeoff sheet](shots/phone-markups.png) |
-
-| CAD drawing with sleeves | Magnifier during calibration |
-| --- | --- |
-| ![DXF plan with layer list, origin and sleeve offsets](shots/desktop-cad-sleeve.png) | ![Magnifier loupe used to place a calibration point](shots/desktop-loupe-calibrate.png) |
-
-| Find sleeves review (desktop) | Find sleeves review (phone) |
-| --- | --- |
-| ![Detected sleeves highlighted with a review list grouped by size](shots/desktop-find-sleeves.png) | ![Find sleeves review list in the phone bottom sheet](shots/phone-find-sleeves.png) |
+It is a portfolio project by a plumber who wants to work in AI and construction technology.
 
 ## Features
 
 **Plans**
-- Open PDF (multi-page), PNG/JPG, DXF and DWG files entirely client-side; also renders Revit-style exports (geometry inside link blocks, mirrored families, HATCH outlines) and fits the view to the main drawing, ignoring stray far-away entities
-- Zoom, pan, pinch-zoom and two-finger pan; fit to page; page navigation
-- Units default to millimetres (lengths in mm, areas in m²); switch to metres or feet-inches with the Units selector. Each project keeps its own unit, and CAD files open in the drawing's units (mm/metric drawings in mm, feet/inch drawings in feet-inches)
-- CAD layer list with on/off toggles; true scale read from the drawing units (`$INSUNITS`), with a manual override for unitless drawings
+
+- Open PDF (multi-page), PNG/JPG, DXF and DWG entirely in the browser
+- Revit-style exports: geometry inside link blocks, mirrored families, hatch outlines, and a view that ignores stray far-away entities
+- Zoom, pan, pinch-zoom, fit and page navigation
+- CAD layer list. True scale comes from the drawing units (`$INSUNITS`), with a manual override for unitless files
+- Millimetres are the default. Lengths are in mm and areas are in m². Switch to metres or feet-inches per project. A CAD file opens in the drawing's own units
 
 **Scale**
-- Per-page calibration: click two points and type a known distance (`12'6"`, `12' 6 1/2"`, `20ft`, `3.5m`, `3500mm`)
-- Standard architectural, engineering and metric scales (1/4" = 1'-0", 1" = 20', 1:100, and more)
-- Feet-inches or metric display
 
-**Takeoff tools**
-- Length, pipe run (polyline), area with perimeter, fixture counts with labels and colours, text notes
-- Sleeve tool: size, label and note; X/Y from a user-set origin; automatic offsets to the nearest walls or gridlines
-- Sleeve heights: set a top of slab, thickness and extension per level in Sleeve count, or draw a Slab zone (an area with its own top of slab and thickness). Each sleeve gets top, bottom and length. You can type an override per sleeve. Elevation text next to a sleeve (for example "T/O SLAB 64,650") is read automatically. Heights show on the sleeve label, in Sleeve count, and in the sleeves CSV and PDF, in metric or feet-inches
-- Auto straight (on by default; button in the toolbar / phone drawing bar; hold Alt to pause): Length, Pipe run, Area and Calibrate points lock to level, plumb, 45 degrees or the drawing's main angle when within about 5 degrees, and line up with the X or Y of existing points. A dashed guide and a 'straight' badge show, also in the magnifier. Snapping to a drawing point still wins
-- Delete: tap a markup with Select (generous touch area) for a floating Edit / Delete bar; trash button or swipe left on list rows; delete a sleeve size from the Sleeve count panel; Clear page and Delete all of a type in the menu; Delete key and a trash button in the top bar on desktop. Every delete can be undone (Undo button in the message)
-- Phone-friendly loading: DWG/DXF files are read in a Web Worker that is closed afterwards, geometry is kept as compact typed arrays, only the visible part of the plan is rendered (tiled, level of detail), and zoom/pan move the existing image until the gesture ends
-- Project file (.pmproj): save plan geometry plus markups on a computer and open it on a phone without converting the DWG again
-- Sleeve count: one tap (phone tool bar or desktop top bar) shows total sleeves and counts by size, layer and level, with Find sleeves and sleeve CSV export right there
-- Find sleeves (CAD): detects sleeves already drawn in DXF/DWG files from block names, layers and circles matching sleeve keywords (SLEEVE, SLV, PEN, CORE, MANCHON, FOURREAU and more), or from one symbol you pick; reads size from block attributes, nearby text or circle diameter; handles nested, rotated and scaled blocks; reads sizes written in block names (e.g. SLV_Round_FLR_4) and ignores view names that exporters append to every block; review list grouped by size with include/exclude, then adds them as numbered sleeves in one undoable step without duplicates
-- Takeoff panel with totals per type, label and colour
-- Select, move, edit and delete markups; drag individual points
+- Calibrate a page by clicking two points and typing a known distance (`12'6"`, `12' 6 1/2"`, `20ft`, `3.5m`, `3500mm`)
+- Standard architectural, engineering and metric scales (1/4" = 1'-0", 1" = 20', 1:100, and others)
+
+**Takeoff**
+
+- Length, pipe run (with extra for drops and fittings), area with perimeter, fixture counts, and text notes
+- Totals by type, label and colour
+- Sleeve tool: size, label, note, X/Y from a chosen origin, and the distance to the nearest walls or gridlines
+- Named gridlines produce a location such as `4y +1250 mm / C −380 mm` (vertical grid, then horizontal grid)
+- Sleeve heights from a level default, a slab zone, nearby elevation text, or a per-sleeve override
+- Find sleeves in DXF/DWG from block names, layers and circles. Sizes are read from attributes, the block name, nearby drawing text, or the circle diameter. Symbols are classified as Nuco/MC bucket, Hilti or drain when the drawing says so
+- Review found sleeves by size, include or exclude them, and add them in one undoable step
+- Sleeve count by size, layer and level, plus CSV and a marked-up PDF
 
 **Precision**
-- Snapping to drawing geometry: endpoints, intersections, points on a line, plus CAD midpoints and circle centres; markers shown on the plan and in the loupe
-- Snaps use real vector data from PDFs (pdf.js operator lists) and DXF/DWG entities; image plans use dark-line detection
-- Magnifier loupe (2x to 8x) rendered from the full-resolution plan; on touch, press and drag with the loupe above your finger
-- Shift for straight horizontal/vertical lines, Alt to place a point without snapping, arrow-key or on-screen nudge for calibration points
+
+- Snap to endpoints, midpoints, intersections, centres and points on a line. PDF plans use vector geometry; images use the dark lines
+- Magnifier from 2x to 8x. On a phone, press and drag with the loupe above your finger
+- Auto straight (on by default) locks Length, Pipe run, Area and Calibrate to level, plumb or 45 degrees when the cursor is within 5 degrees, and lines the point up with existing points. Hold Alt to place freely. Shift forces horizontal or vertical
 
 **Workflow**
-- Undo and redo (100 steps) for every change, including scale and layer changes
-- Autosave of projects (plan file included) in IndexedDB; project list to reopen or delete
-- Export takeoff CSV, sleeve schedule CSV, and a marked-up PDF with a summary page
-- Responsive layout: desktop toolbar with collapsible panel; phone layout with compact top bar, bottom tool bar, contextual drawing bar and takeoff bottom sheet
 
-## Tech stack
+- Undo and redo for measurements, scale and layer changes
+- Autosave in the browser, plus a `.pmproj` file so a DWG opened on a computer can be measured on a phone without converting it again
+- Export takeoff CSV, a sleeve schedule CSV, and a marked-up PDF
+- Desktop toolbar with a collapsible takeoff panel. On a phone: compact top bar, bottom tools, a drawing bar and a takeoff sheet
 
-- Plain HTML, CSS and JavaScript; no build step and no framework
-- [pdf.js](https://github.com/mozilla/pdf.js) for PDF rendering and vector geometry extraction
-- [pdf-lib](https://github.com/Hopding/pdf-lib) for marked-up PDF export
-- [dxf-parser](https://github.com/gdsestimating/dxf-parser) for DXF files
-- [libredwg-web](https://github.com/mlightcad/libredwg-web) (GNU LibreDWG compiled to WebAssembly) for DWG files, loaded only when a DWG is opened
-- [Cloudflare Pages](https://pages.cloudflare.com/) for free static hosting
-- [Playwright](https://playwright.dev/) for end-to-end tests
+## Screenshots
 
-All libraries are vendored in `lib/`, so the app works without any CDN.
+Taken from the local app using the synthetic plans in `test/` (`sample-plan.pdf` and `sample-grid.dxf`).
 
-## Run locally
+| Desktop takeoff | Desktop sleeves |
+| --- | --- |
+| ![Desktop takeoff: 20 ft length, 18.58 m² room and three WC counts on a synthetic plumbing plan](shots/desktop-measure.png) | ![Synthetic CAD plan with Nuco, Hilti and drain sleeves and the grid callout 4y +1250 mm / C −380 mm](shots/desktop-grid-callout.png) |
 
-Any static file server works:
+| Phone | Find sleeves on a phone |
+| --- | --- |
+| ![Phone width with the plan fitted and the bottom tool bar](shots/phone-measure.png) | ![Find sleeves review on a phone, grouped as Nuco/MC bucket, Hilti and drain](shots/phone-sleeves.png) |
+
+The sleeve review before they are added:
+
+![Find sleeves list on desktop, with size taken from the text beside each symbol](shots/desktop-sleeves.png)
+
+## Quick start
+
+Any static file server works. From the repository root:
 
 ```bash
 git clone https://github.com/lorplace/plan-measure.git
 cd plan-measure
 python3 -m http.server 8000
-# open http://localhost:8000
 ```
+
+Open http://localhost:8000 and use **Open plan**. Two synthetic files are included:
+
+- `test/sample-plan.pdf` — architectural sheet. Set scale to 1/4" = 1'-0" and measure the 20 ft line and the 20 ft by 10 ft room
+- `test/sample-grid.dxf` — millimetre CAD plan with grid bubbles `4`, `4y`, `B` and `C`, and three sleeve notes
+
+The plans under `test/` are synthetic. Do not add PDF, DWG or DXF files from real jobs.
 
 ## Tests
 
-The tests drive the real app in Chrome with Playwright and check measurements against plans with known dimensions (calibration, lengths and areas within 1%, CAD coordinates exact).
+Unit tests use [Vitest](https://vitest.dev/) and cover scale calibration, millimetre lengths and square-metre areas, length / area / count math, level / plumb / 45 degree snapping, sleeve detection and type, and gridline offsets.
 
 ```bash
-pip install playwright reportlab ezdxf
-python3 -m playwright install chromium
-
-python3 test/make_sample.py   # sample PDF plan with known dimensions
-python3 test/make_dxf.py      # sample DXF plans in feet, mm and unitless
-
-python3 -m http.server 8766 &
-python3 test/e2e.py                                  # starts its own server
-python3 test/make_find_dxf.py   # sample DXF with sleeve blocks, circles and decoys
-python3 test/make_revit_dxf.py  # synthetic Revit-style export (far-from-origin link blocks, mirrored families, stray entity, missing xref)
-for t in phone loupe undo snap cad find revit count webkit pmproj heights delete straight; do python3 test/$t.py http://127.0.0.1:8766/; done
+npm install
+npm test
 ```
 
-The tests launch Chrome from `/usr/bin/google-chrome`; change `executable_path` in the scripts if yours is elsewhere. The DWG checks in `test/cad.py` expect sample files from the LibreDWG test data (`example_2018.dwg`, `example_r14.dwg`) in `/tmp` as `ex_2018.dwg` and `ex_r14.dwg`.
+GitHub Actions runs `npm test` on every push and pull request (`.github/workflows/test.yml`).
 
-## Deploy
+`test/*.py` are optional browser checks from earlier development. They drive Chrome through Playwright against a local server and are not part of CI. Regenerating a synthetic DXF needs Python and `ezdxf` (`python3 test/make_grid_dxf.py` and the other `test/make_*.py` scripts).
 
-The site is static. To deploy on Cloudflare Pages, upload `index.html`, `style.css`, `app.js`, `units.js`, `cad.js` and `lib/`, for example:
+## Tech stack
 
-```bash
-npx wrangler pages deploy <folder> --project-name plan-measure
-```
+- Plain HTML, CSS and JavaScript. No framework and no build step for the app itself
+- [pdf.js](https://github.com/mozilla/pdf.js) for PDF rendering and vector geometry
+- [pdf-lib](https://github.com/Hopding/pdf-lib) for marked-up PDF export
+- [dxf-parser](https://github.com/gdsestimating/dxf-parser) for DXF
+- [libredwg-web](https://github.com/mlightcad/libredwg-web) (GNU LibreDWG as WebAssembly) for DWG, loaded only when a DWG is opened
+- [Vitest](https://vitest.dev/) for the unit tests
+- [Cloudflare Pages](https://pages.cloudflare.com/) for static hosting
+
+Libraries are vendored in `lib/`, so the app does not depend on a CDN. Measurement code that used to sit inside `app.js` now lives in `units.js`, `measure.js`, `straight.js`, `sleeves.js` and `grid.js`. The page behaviour is unchanged; those modules are what the tests call.
+
+## Roadmap
+
+- A small fitting library (elbows, tees, hangers) on top of the extra-length field pipe runs already have
+- Dimension and leader text from CAD, not only the grid bubbles used for sleeve callouts
+- Project files that can be shared, not only stored in one browser
+- An installable offline copy for a job site with poor reception
 
 ## Limitations
 
-- DWG support depends on LibreDWG; some files (often older versions) cannot be read, and the app then suggests saving as DXF
-- Hatches, solids, tables and multileaders in CAD files are not drawn
-- Projects are stored only in the browser where they were created
+- DWG support depends on LibreDWG. Some files, often older ones, cannot be read; save them as DXF
+- Hatches are drawn as outlines. Solids, tables and multileaders are not drawn
+- Projects saved in the browser stay in that browser. Use **Save project file** to move one
 
 ## Licence
 
-GPL-3.0. See [LICENSE](LICENSE). The project bundles libredwg-web, which is GPL-3.0, so the whole app is distributed under the same licence. pdf.js (Apache-2.0), pdf-lib (MIT) and dxf-parser (MIT) are used under their own compatible licences.
+GPL-3.0. See [LICENSE](LICENSE). The app bundles libredwg-web, which is GPL-3.0, so the project is distributed under the same licence. pdf.js (Apache-2.0), pdf-lib (MIT) and dxf-parser (MIT) stay under their own licences.

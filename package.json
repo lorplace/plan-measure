@@ -1,0 +1,11 @@
+{
+  "name": "plan-measure",
+  "private": true,
+  "description": "Browser plan viewer and construction takeoff. Unit tests cover scale, measure, snap, sleeves and grid offsets.",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}
