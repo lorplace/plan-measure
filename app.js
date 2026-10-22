@@ -409,8 +409,8 @@ const ICONS = {
  table:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M3 15h18M9 4v16"/>', download:'<path d="M12 3v12M7 10l5 5 5-5M4 20h16"/>',
  panel:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M15 4v16"/>', close:'<path d="M6 6l12 12M18 6L6 18"/>',
  undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-4"/>', redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h4"/>', snap:'<rect x="8" y="8" width="8" height="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>', sleeve:'<circle cx="12" cy="12" r="7"/><path d="M5 12h14M12 5v14"/>', origin:'<path d="M4 20V4M4 20h16"/><circle cx="4" cy="20" r="2"/>', layers:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>', find:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20"/><circle cx="10" cy="10" r="2"/>', select:'<path d="M5 3l14 8-6 2-2 6z"/>', loupe:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>', up:'<path d="M5 15l7-7 7 7"/>', down:'<path d="M5 9l7 7 7-7"/>', more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
- cal:'<path d="M4 20L20 4"/><circle cx="4" cy="20" r="2"/><circle cx="20" cy="4" r="2"/><path d="M9 9l-2-2M15 15l2 2"/>', line:'<path d="M4 18L20 6"/><path d="M4 14v8M20 2v8"/>',
- poly:'<path d="M3 19h6V9h6v6h6"/><circle cx="3" cy="19" r="1.5"/><circle cx="21" cy="15" r="1.5"/>', area:'<path d="M4 6l12-2 4 10-8 6-8-4z" fill="currentColor" fill-opacity=".25"/>',
+ cal:'<path d="M4 17h10"/><path d="M4 14v6M14 14v6"/><circle cx="18" cy="8" r="3"/><path d="M20.2 10.2L22 12"/>', line:'<path d="M4 16h16"/><path d="M4 13v6M20 13v6"/><path d="M9 16V8h6"/>',
+ poly:'<path d="M4 18h7V8h8"/><circle cx="4" cy="18" r="1.6" fill="currentColor"/><circle cx="11" cy="18" r="1.6" fill="currentColor"/><circle cx="11" cy="8" r="1.6" fill="currentColor"/><circle cx="19" cy="8" r="1.6" fill="currentColor"/>', area:'<path d="M4 7l8-3 8 4v9l-8 4-8-4z"/><path d="M4 7l8 4 8-4M12 11v10" opacity=".7"/>',
  count:'<circle cx="7" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="12" cy="17" r="3"/>', text:'<path d="M5 5h14M12 5v14M9 19h6"/>'
 };
 document.querySelectorAll('[data-icon]').forEach(b => { const txt = [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
@@ -825,7 +825,7 @@ setNum($('#eThk'), parseThk, v => { const it = selItem(); if (it) { if (v == nul
 setNum($('#eExt'), parseThk, v => { const it = selItem(); if (it) { if (v == null) delete it.ext; else it.ext = v; } });
 // Slab zone tool: draws an area that is marked as a slab zone
 (function () { const b = document.createElement('button'); b.id = 'zoneTool'; b.className = 'tool'; b.title = 'Slab zone: draw an area with its own top of slab and thickness'; b.dataset.icon = 'area'; b.innerHTML = '<span class="t">Slab zone</span>';
-  const ar = document.querySelector('[data-tool=area]'); ar.after(b); try { const ic = ar.querySelector('svg'); if (ic) b.prepend(ic.cloneNode(true)); } catch (e) { } })();
+  const host = document.querySelector('[data-tool=origin]'); host.after(b); try { const ic = document.querySelector('[data-tool=area] svg'); if (ic) b.prepend(ic.cloneNode(true)); } catch (e) { } })();
 let zoneNext = false;
 $('#zoneTool').onclick = () => { setTool('area'); zoneNext = true; document.querySelectorAll('.tool').forEach(x => x.classList.toggle('active', x.id === 'zoneTool')); toast('Draw the slab zone outline, then Finish. Then enter its top of slab and thickness.', 5000); };
 const _setToolZ = setTool; setTool = function (t) { if (zoneNext && t !== 'area') zoneNext = false; _setToolZ(t); };

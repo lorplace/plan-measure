@@ -16,4 +16,4 @@ First stable release of Plan Measure, a browser-only takeoff tool for the trades
 - Sleeve totals by size, layer and level
 - Snapping (end, mid, centre, intersection, on a line), a magnifier, and auto straight for level, plumb and 45 degree lines
 - Undo and redo, autosave, a `.pmproj` project file, takeoff CSV, sleeve CSV and a marked-up PDF
-- Layouts for a desktop toolbar and for a phone, including a bottom tool bar and a takeoff sheet
+- Desktop tool rail (View, Scale, Measure, Sleeves) and a quantities panel. On a phone, a compact top bar, large bottom tools, a drawing bar and a takeoff sheet
