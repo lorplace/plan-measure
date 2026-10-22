@@ -82,7 +82,9 @@ function visRegion() { const { w, h } = doc.sizes[page], vr = vpEl.getBoundingCl
   return x1 > x0 && y1 > y0 ? { x0, y0, w: x1 - x0, h: y1 - y0 } : { x0: 0, y0: 0, w, h }; }
 function placeCanvas() { const g = canvas._reg; if (!g) return; canvas.style.left = g.x0 * zoom + 'px'; canvas.style.top = g.y0 * zoom + 'px'; canvas.style.width = g.w * zoom + 'px'; canvas.style.height = g.h * zoom + 'px'; }
 let renderSeq = 0;
+let printLock = false;
 async function renderCanvas() {
+  if (printLock) return scheduleRender(200);
   if (!doc || !doc.sizes[page]) return; const seq = ++renderSeq, reg = visRegion();
   let r = zoom * (window.devicePixelRatio || 1); const maxPx = isPhoneDev ? 4e6 : 16e6; // iOS kills tabs that hold big canvases
   if (reg.w * reg.h * r * r > maxPx) r = Math.sqrt(maxPx / (reg.w * reg.h));
@@ -227,7 +229,7 @@ function clickAt(p, e) {
 // pointer handling: click / drag / pan / pinch
 const pointers = new Map(); let gesture = null;
 vpEl.addEventListener('pointerdown', e => {
-  if (!doc) return; try { vpEl.setPointerCapture(e.pointerId); } catch (err) { } pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!doc || e.target.closest('button,a,input,textarea,select,label')) return; try { vpEl.setPointerCapture(e.pointerId); } catch (err) { } pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 2) { const [a, b] = [...pointers.values()]; gesture = { kind: 'pinch', d: Math.hypot(a.x - b.x, a.y - b.y), z: zoom, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 }; hideLoupe(); return; }
   const p = pagePt(e);
   gesture = { kind: 'maybe', sx: e.clientX, sy: e.clientY, sl: vpEl.scrollLeft, st: vpEl.scrollTop, p, moved: false };
@@ -409,6 +411,7 @@ const ICONS = {
  table:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M3 15h18M9 4v16"/>', download:'<path d="M12 3v12M7 10l5 5 5-5M4 20h16"/>',
  panel:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M15 4v16"/>', close:'<path d="M6 6l12 12M18 6L6 18"/>',
  undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-4"/>', redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h4"/>', snap:'<rect x="8" y="8" width="8" height="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>', sleeve:'<circle cx="12" cy="12" r="7"/><path d="M5 12h14M12 5v14"/>', origin:'<path d="M4 20V4M4 20h16"/><circle cx="4" cy="20" r="2"/>', layers:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>', find:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20"/><circle cx="10" cy="10" r="2"/>', select:'<path d="M5 3l14 8-6 2-2 6z"/>', loupe:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>', up:'<path d="M5 15l7-7 7 7"/>', down:'<path d="M5 9l7 7 7-7"/>', more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
+ full:'<path d="M4 10V4h6M14 4h6v6M20 14v6h-6M10 20H4v-6"/>', exitfs:'<path d="M10 4v6H4M14 4v6h6M14 20v-6h6M10 20v-6H4"/>', print:'<path d="M7 8V3h10v5"/><path d="M6 17H4a1 1 0 01-1-1v-5a2 2 0 012-2h14a2 2 0 012 2v5a1 1 0 01-1 1h-2"/><rect x="7" y="13" width="10" height="8"/>',
  cal:'<path d="M4 17h10"/><path d="M4 14v6M14 14v6"/><circle cx="18" cy="8" r="3"/><path d="M20.2 10.2L22 12"/>', line:'<path d="M4 16h16"/><path d="M4 13v6M20 13v6"/><path d="M9 16V8h6"/>',
  poly:'<path d="M4 18h7V8h8"/><circle cx="4" cy="18" r="1.6" fill="currentColor"/><circle cx="11" cy="18" r="1.6" fill="currentColor"/><circle cx="11" cy="8" r="1.6" fill="currentColor"/><circle cx="19" cy="8" r="1.6" fill="currentColor"/>', area:'<path d="M4 7l8-3 8 4v9l-8 4-8-4z"/><path d="M4 7l8 4 8-4M12 11v10" opacity=".7"/>',
  count:'<circle cx="7" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="12" cy="17" r="3"/>', text:'<path d="M5 5h14M12 5v14M9 19h6"/>'
@@ -955,3 +958,95 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
   v.addEventListener('selectstart', e => { if (plan(e)) e.preventDefault(); });
   const clr = () => { const s = window.getSelection && getSelection(); if (s && s.rangeCount && !(document.activeElement && document.activeElement.matches('input,textarea'))) s.removeAllRanges(); };
   document.addEventListener('touchend', clr, { passive: true }); document.addEventListener('touchcancel', clr, { passive: true }); })();
+
+// ---------- full screen and print ----------
+function loadImgEl(src) { return new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('Could not draw the markups')); im.src = src; }); }
+function fsSupport() { return { requestFullscreen: typeof vpEl.requestFullscreen === 'function', webkitRequestFullscreen: typeof vpEl.webkitRequestFullscreen === 'function', iphone: View.isIphone(navigator.userAgent) }; }
+function fsApiOn() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+function fsOn() { return fsApiOn() || document.body.classList.contains('immersive'); }
+function syncFsBtn() {
+  const on = fsOn(); document.body.classList.toggle('fs', on);
+  const b = $('#fullBtn'); if (!b) return; b.classList.toggle('on', on); b.title = on ? 'Exit full screen' : 'View full screen';
+  const t = b.querySelector('.t'); if (t) t.textContent = on ? 'Exit' : 'Full';
+  const ic = b.querySelector('svg'); if (ic) ic.innerHTML = ICONS[on ? 'exitfs' : 'full'];
+}
+function afterFrame(fn) { requestAnimationFrame(() => requestAnimationFrame(fn)); }
+function enterImmersive() { document.body.classList.add('immersive'); const m = $('#moreMenu'); if (m) m.hidden = true; syncFsBtn(); afterFrame(() => { if (doc) fitPage(); }); }
+function exitImmersive() { document.body.classList.remove('immersive'); syncFsBtn(); afterFrame(() => { if (doc) fitPage(); }); }
+async function enterApi() {
+  const req = vpEl.requestFullscreen || vpEl.webkitRequestFullscreen;
+  try { await req.call(vpEl); } catch (e) { enterImmersive(); }
+}
+function exitApi() { const exit = document.exitFullscreen || document.webkitExitFullscreen; if (exit) return exit.call(document); }
+function toggleFullscreen() {
+  if (document.body.classList.contains('immersive')) return exitImmersive();
+  if (fsApiOn()) return exitApi();
+  if (View.fullscreenStrategy(fsSupport()) === 'api') enterApi(); else enterImmersive();
+}
+['fullscreenchange', 'webkitfullscreenchange'].forEach(ev => document.addEventListener(ev, () => { syncFsBtn(); afterFrame(() => { if (doc) fitPage(); }); }));
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('immersive') && !document.querySelector('dialog[open]')) exitImmersive(); });
+$('#fullBtn').onclick = e => { e.stopPropagation(); toggleFullscreen(); };
+$('#fsExit').onclick = () => { if (document.body.classList.contains('immersive')) exitImmersive(); else exitApi(); };
+
+let printUrl = '';
+async function composePrintCanvas() {
+  const { w, h } = doc.sizes[page];
+  const plan = View.printPlan(w, h, { dpi: 192, maxPixels: isPhoneDev ? 6e6 : 14e6, maxEdge: isPhoneDev ? 3072 : 4096 });
+  const r = Math.min(plan.pixels.w / w, plan.pixels.h / h);
+  const cw = Math.max(1, Math.round(w * r)), ch = Math.max(1, Math.round(h * r));
+  const off = document.createElement('canvas'); off.width = cw; off.height = ch;
+  const ctx = off.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
+  printLock = true;
+  try {
+    if (renderTask) { try { renderTask.cancel(); } catch (e) { } renderTask = null; }
+    if (doc.type === 'pdf') {
+      const p = await doc.pdf.getPage(page); const vp = p.getViewport({ scale: r });
+      const task = p.render({ canvasContext: ctx, viewport: vp });
+      try { await task.promise; } catch (e) { if (!e || e.name !== 'RenderingCancelledException') throw e; }
+    } else if (doc.type === 'cad') CAD.draw(ctx, doc.cad, r, 0, 0, (proj && proj.hidden) || {}, { x0: 0, y0: 0, w, h });
+    else if (doc.img) ctx.drawImage(doc.img, 0, 0, cw, ch);
+    const clone = svg.cloneNode(true);
+    clone.querySelectorAll('.handle,.hit,[data-guide]').forEach(n => n.remove());
+    clone.setAttribute('width', String(cw)); clone.setAttribute('height', String(ch)); clone.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    clone.querySelectorAll('text').forEach(t => { if (!t.getAttribute('font-family')) t.setAttribute('font-family', 'sans-serif'); });
+    const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml;charset=utf-8' }));
+    try { const img = await loadImgEl(url); ctx.drawImage(img, 0, 0, cw, ch); } finally { URL.revokeObjectURL(url); }
+  } finally { printLock = false; scheduleRender(40); }
+  return { canvas: off, plan, cw, ch };
+}
+function fillPrintQty() {
+  const u = proj.units === 'mm' ? 'millimetres' : proj.units === 'met' ? 'metres' : 'feet-inches';
+  const rows = groups().map(g => `<tr><td><span class="sw" style="background:${g.color}"></span></td><td>${esc(TYPE_NAMES[g.type] + (g.label ? ' — ' + g.label : ''))}</td><td class="n">${esc(fmtGroup(g))}</td><td class="n">${g.n}</td></tr>`).join('');
+  $('#printQty').innerHTML = `<h1>${esc(proj.name || 'Takeoff')}</h1><p>Quantities. Units: ${esc(u)}.</p><table><thead><tr><th></th><th>Item</th><th class="n">Total</th><th class="n">Count</th></tr></thead><tbody>${rows || '<tr><td colspan="4">No measurements yet.</td></tr>'}</tbody></table>`;
+}
+async function preparePrint() {
+  const { canvas, plan, cw, ch } = await composePrintCanvas();
+  const blob = await new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error('empty image')), 'image/png'));
+  canvas.width = canvas.height = 0;
+  if (printUrl) URL.revokeObjectURL(printUrl);
+  printUrl = URL.createObjectURL(blob);
+  const img = $('#printImg'); img.src = printUrl; img.width = cw; img.height = ch;
+  try { await img.decode(); } catch (e) { }
+  $('#printCap').textContent = `${proj ? proj.name : 'Plan'} — page ${page} of ${doc.numPages}. ${$('#scaleInfo').textContent || ''}`;
+  if (proj) fillPrintQty();
+  let css = document.getElementById('printPageCss'); if (!css) { css = document.createElement('style'); css.id = 'printPageCss'; document.head.appendChild(css); }
+  css.textContent = `@page { size: letter ${plan.orientation}; margin: 0.5in; }`;
+  $('#printRoot').dataset.orientation = plan.orientation;
+  $('#printRoot').classList.add('with-qty');
+  return plan;
+}
+$('#printBtn').onclick = async () => {
+  if (!doc) return toast('Open a plan to print.');
+  toast('Preparing the sheet…', 20000);
+  try { await preparePrint(); $('#toast').style.display = 'none'; $('#printQtyOpt').checked = true; $('#printDlg').showModal(); }
+  catch (e) { console.error(e); toast('Could not prepare the print: ' + e.message, 5000); }
+};
+let printArmed = false;
+$('#printGo').onclick = () => {
+  if (printArmed) return; printArmed = true;
+  $('#printRoot').classList.toggle('with-qty', $('#printQtyOpt').checked);
+  window.print(); $('#printDlg').close();
+  setTimeout(() => { printArmed = false; }, 600);
+};
+Object.assign(window.PM, { fullscreenStrategy: () => View.fullscreenStrategy(fsSupport()), enterImmersive, exitImmersive, toggleFullscreen, preparePrint });
+Object.defineProperty(window.PM, 'printOrientation', { get() { return $('#printRoot').dataset.orientation || ''; } });

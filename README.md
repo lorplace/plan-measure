@@ -43,6 +43,8 @@ It is a portfolio project by a plumber who wants to work in AI and construction 
 - Undo and redo for measurements, scale and layer changes
 - Autosave in the browser, plus a `.pmproj` file so a DWG opened on a computer can be measured on a phone without converting it again
 - Export takeoff CSV, a sleeve schedule CSV, and a marked-up PDF
+- Full screen for the plan. Desktop and Android use the fullscreen view; iPhone Safari hides the tool rail and panels and shows an exit button
+- Print the current sheet with its measurement labels, fitted to the page. A wide sheet prints landscape and a tall sheet prints portrait. The quantities list can go on a second page
 - Desktop tool rail grouped as View, Scale, Measure and Sleeves, with a quantities panel. On a phone: compact top bar, large bottom tools, a drawing bar and a takeoff sheet
 
 ## Screenshots
