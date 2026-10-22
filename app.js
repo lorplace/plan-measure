@@ -13,18 +13,9 @@ let renderTask = null, renderTimer = null, shiftDown = false, guide = null, stra
 // ---------- helpers ----------
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 function toast(msg, ms = 2500) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); }
-const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
-function polyLen(pts, closed) { let s = 0; for (let i = 1; i < pts.length; i++) s += dist(pts[i - 1], pts[i]); if (closed && pts.length > 2) s += dist(pts[pts.length - 1], pts[0]); return s; }
-function polyArea(pts) { let s = 0; for (let i = 0; i < pts.length; i++) { const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length]; s += x1 * y2 - x2 * y1; } return Math.abs(s) / 2; }
-function centroid(pts) { let x = 0, y = 0; pts.forEach(p => { x += p[0]; y += p[1]; }); return [x / pts.length, y / pts.length]; }
+const dist = Measure.dist, polyLen = Measure.polyLen, polyArea = Measure.polyArea, centroid = Measure.centroid;
 const scaleOf = pg => proj && proj.scales[pg];
-function measure(it) {
-  const s = scaleOf(it.page);
-  if (it.type === 'line' || it.type === 'poly') return s ? polyLen(it.pts) * s + (it.extra || 0) : NaN;
-  if (it.type === 'area') return s ? polyArea(it.pts) * s * s : NaN;
-  if (it.type === 'count' || it.type === 'sleeve') return 1;
-  return NaN;
-}
+function measure(it) { return Measure.measure(it, scaleOf(it.page)); }
 function fmtItem(it) {
   const u = proj.units, v = measure(it);
   if (it.type === 'count' || it.type === 'text') return '';
@@ -33,7 +24,7 @@ function fmtItem(it) {
   if (it.type === 'area') return Units.fmtArea(v, u) + ' (perim ' + Units.fmtLen(polyLen(it.pts, true) * scaleOf(it.page), u) + ')';
   return Units.fmtLen(v, u);
 }
-function snapOrtho(prev, p) { if (!prev) return p; const dx = Math.abs(p[0] - prev[0]), dy = Math.abs(p[1] - prev[1]); return dx >= dy ? [p[0], prev[1]] : [prev[0], p[1]]; }
+function snapOrtho(prev, p) { return Straight.snapOrtho(prev, p); }
 
 // ---------- loading ----------
 function fileMime(f) { const n = f.name.toLowerCase(); if (n.endsWith('.dxf')) return 'application/dxf'; if (n.endsWith('.dwg')) return 'application/dwg'; return f.type || (n.endsWith('.pdf') ? 'application/pdf' : 'image/png'); }
@@ -91,7 +82,9 @@ function visRegion() { const { w, h } = doc.sizes[page], vr = vpEl.getBoundingCl
   return x1 > x0 && y1 > y0 ? { x0, y0, w: x1 - x0, h: y1 - y0 } : { x0: 0, y0: 0, w, h }; }
 function placeCanvas() { const g = canvas._reg; if (!g) return; canvas.style.left = g.x0 * zoom + 'px'; canvas.style.top = g.y0 * zoom + 'px'; canvas.style.width = g.w * zoom + 'px'; canvas.style.height = g.h * zoom + 'px'; }
 let renderSeq = 0;
+let printLock = false;
 async function renderCanvas() {
+  if (printLock) return scheduleRender(200);
   if (!doc || !doc.sizes[page]) return; const seq = ++renderSeq, reg = visRegion();
   let r = zoom * (window.devicePixelRatio || 1); const maxPx = isPhoneDev ? 4e6 : 16e6; // iOS kills tabs that hold big canvases
   if (reg.w * reg.h * r * r > maxPx) r = Math.sqrt(maxPx / (reg.w * reg.h));
@@ -149,19 +142,13 @@ function draw() {
 }
 
 // ---------- side panel ----------
-function groups() {
-  const m = new Map();
-  for (const it of proj.items) { if (it.type === 'text') continue;
-    const lab = it.type === 'sleeve' ? [it.size, it.label].filter(Boolean).join(' ') : (it.label || ''); const k = it.type + '|' + lab + '|' + it.color; if (!m.has(k)) m.set(k, { type: it.type, label: lab, color: it.color, n: 0, sum: 0, noscale: 0 });
-    const gr = m.get(k), v = measure(it); gr.n++; if (isFinite(v)) gr.sum += v; else gr.noscale++; }
-  return [...m.values()];
-}
+function groups() { return Measure.groupTakeoff(proj.items, scaleOf); }
 function fmtGroup(g) { const u = proj.units; if (g.type === 'count' || g.type === 'sleeve') return g.n + ' ea'; if (g.type === 'area') return Units.fmtArea(g.sum, u); return Units.fmtLen(g.sum, u); }
 function renderList() {
   if (!proj) return;
   $('#totals').innerHTML = '<table class="tot">' + groups().map(g => `<tr><td><span class="sw" style="display:inline-block;background:${g.color}"></span></td><td>${TYPE_NAMES[g.type]}${g.label ? ' - ' + esc(g.label) : ''}</td><td><b>${fmtGroup(g)}</b>${g.noscale ? ' *' : ''}</td></tr>`).join('') + '</table>' + (groups().some(g => g.noscale) ? '<small>* some items on pages without scale</small>' : '');
   const only = $('#pageOnly').checked;
-  $('#list').innerHTML = proj.items.filter(i => !only || i.page === page).map(i => `<div class="row ${i.id === selId ? 'sel' : ''}" data-id="${i.id}"><span class="sw" style="background:${i.color}"></span>p${i.page} ${TYPE_NAMES[i.type]} ${esc(i.type === 'text' ? (i.text || '').slice(0, 20) : i.label || '')}<span class="v">${fmtItem(i)}</span></div>`).join('') || '<small>No items yet.</small>';
+  $('#list').innerHTML = proj.items.filter(i => !only || i.page === page).map(i => `<div class="row ${i.id === selId ? 'sel' : ''}" data-id="${i.id}"><span class="sw" style="background:${i.color}"></span>p${i.page} ${TYPE_NAMES[i.type]} ${esc(i.type === 'text' ? (i.text || '').slice(0, 20) : ((i.sleeveType ? i.sleeveType + ' ' : '') + (i.label || '')))}<span class="v">${fmtItem(i)}</span></div>`).join('') || '<small>No items yet.</small>';
   const it = proj.items.find(i => i.id === selId); $('#edit').hidden = !it;
   if (it) { $('#eLabel').value = it.label || ''; $('#eColor').value = it.color; $('#eTextRow').hidden = it.type !== 'text'; $('#eText').value = it.text || '';
     $('#eDropRow').hidden = !(it.type === 'line' || it.type === 'poly'); if (document.activeElement !== $('#eExtra')) $('#eExtra').value = it.extra ? Units.fmtLen(it.extra, proj.units) : ''; }
@@ -242,7 +229,7 @@ function clickAt(p, e) {
 // pointer handling: click / drag / pan / pinch
 const pointers = new Map(); let gesture = null;
 vpEl.addEventListener('pointerdown', e => {
-  if (!doc) return; try { vpEl.setPointerCapture(e.pointerId); } catch (err) { } pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (!doc || e.target.closest('button,a,input,textarea,select,label')) return; try { vpEl.setPointerCapture(e.pointerId); } catch (err) { } pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 2) { const [a, b] = [...pointers.values()]; gesture = { kind: 'pinch', d: Math.hypot(a.x - b.x, a.y - b.y), z: zoom, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 }; hideLoupe(); return; }
   const p = pagePt(e);
   gesture = { kind: 'maybe', sx: e.clientX, sy: e.clientY, sl: vpEl.scrollLeft, st: vpEl.scrollTop, p, moved: false };
@@ -311,7 +298,7 @@ function applyScale(mPerUnit, name, all) { const pgs = all ? Array.from({ length
 $('#scaleBtn').onclick = () => { if (!doc) return toast('Open a plan first'); $('#imgDpiRow').hidden = doc.type !== 'image'; $('#cadUnitRow').hidden = doc.type !== 'cad'; $('#stdScale').hidden = doc.type === 'cad'; $('#scaleDlg').showModal(); };
 $('#scaleDlg').addEventListener('close', () => { if ($('#scaleDlg').returnValue !== 'ok') return; if (doc.type === 'cad') { const u = +$('#cadUnit').value; return applyScale(CAD.UNIT_M[u] / doc.cad.k, 'CAD units: ' + CAD.UNIT_NAME[u], false); }
   const s = Units.STD[$('#stdScale').value];
-  let m = s.mPerPt; if (doc.type === 'image') m = s.ratio * Units.IN / (+$('#imgDpi').value || 150); applyScale(m, s.name, $('#allPages').checked); });
+  const m = Measure.scaleFromStandard(s, doc.type === 'image' ? 'image' : 'pdf', +$('#imgDpi').value); applyScale(m, s.name, $('#allPages').checked); });
 function openCalibrate() { $('#calVal').value = ''; $('#calDlg').showModal(); }
 $('#calDlg').addEventListener('close', () => {
   const pts = draft && draft.pts;
@@ -319,7 +306,7 @@ $('#calDlg').addEventListener('close', () => {
     draft = null; hover = null;
     const real = Units.parseLength($('#calVal').value, proj.units);
     if (!(real > 0)) { toast('Could not read that length. Try again.'); draw(); return; }
-    applyScale(real / dist(pts[0], pts[1]), 'calibrated ' + Units.fmtLen(real, proj.units), $('#calAll').checked);
+    applyScale(Measure.scaleFromDistance(dist(pts[0], pts[1]), real), 'calibrated ' + Units.fmtLen(real, proj.units), $('#calAll').checked);
     setTool('line');
   } else draw();
 });
@@ -424,8 +411,9 @@ const ICONS = {
  table:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M3 15h18M9 4v16"/>', download:'<path d="M12 3v12M7 10l5 5 5-5M4 20h16"/>',
  panel:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M15 4v16"/>', close:'<path d="M6 6l12 12M18 6L6 18"/>',
  undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-4"/>', redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h4"/>', snap:'<rect x="8" y="8" width="8" height="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>', sleeve:'<circle cx="12" cy="12" r="7"/><path d="M5 12h14M12 5v14"/>', origin:'<path d="M4 20V4M4 20h16"/><circle cx="4" cy="20" r="2"/>', layers:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>', find:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20"/><circle cx="10" cy="10" r="2"/>', select:'<path d="M5 3l14 8-6 2-2 6z"/>', loupe:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>', up:'<path d="M5 15l7-7 7 7"/>', down:'<path d="M5 9l7 7 7-7"/>', more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
- cal:'<path d="M4 20L20 4"/><circle cx="4" cy="20" r="2"/><circle cx="20" cy="4" r="2"/><path d="M9 9l-2-2M15 15l2 2"/>', line:'<path d="M4 18L20 6"/><path d="M4 14v8M20 2v8"/>',
- poly:'<path d="M3 19h6V9h6v6h6"/><circle cx="3" cy="19" r="1.5"/><circle cx="21" cy="15" r="1.5"/>', area:'<path d="M4 6l12-2 4 10-8 6-8-4z" fill="currentColor" fill-opacity=".25"/>',
+ full:'<path d="M4 10V4h6M14 4h6v6M20 14v6h-6M10 20H4v-6"/>', exitfs:'<path d="M10 4v6H4M14 4v6h6M14 20v-6h6M10 20v-6H4"/>', print:'<path d="M7 8V3h10v5"/><path d="M6 17H4a1 1 0 01-1-1v-5a2 2 0 012-2h14a2 2 0 012 2v5a1 1 0 01-1 1h-2"/><rect x="7" y="13" width="10" height="8"/>',
+ cal:'<path d="M4 17h10"/><path d="M4 14v6M14 14v6"/><circle cx="18" cy="8" r="3"/><path d="M20.2 10.2L22 12"/>', line:'<path d="M4 16h16"/><path d="M4 13v6M20 13v6"/><path d="M9 16V8h6"/>',
+ poly:'<path d="M4 18h7V8h8"/><circle cx="4" cy="18" r="1.6" fill="currentColor"/><circle cx="11" cy="18" r="1.6" fill="currentColor"/><circle cx="11" cy="8" r="1.6" fill="currentColor"/><circle cx="19" cy="8" r="1.6" fill="currentColor"/>', area:'<path d="M4 7l8-3 8 4v9l-8 4-8-4z"/><path d="M4 7l8 4 8-4M12 11v10" opacity=".7"/>',
  count:'<circle cx="7" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="12" cy="17" r="3"/>', text:'<path d="M5 5h14M12 5v14M9 19h6"/>'
 };
 document.querySelectorAll('[data-icon]').forEach(b => { const txt = [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
@@ -687,12 +675,14 @@ function sleeveInfo(it) {
         if (Math.abs(dy) <= len * 0.01 && Math.min(s[0], s[2]) <= p[0] + 1e-6 && Math.max(s[0], s[2]) >= p[0] - 1e-6) { const y = (s[1] + s[3]) / 2, d = Math.abs(y - p[1]); if (d > 1e-6 && d < by) { by = d; r.ry = { y, L: s[5] }; } } } }
     sleeveCache.set(it.id, r); }
   const s = scaleOf(it.page), o = proj.origins && proj.origins[it.page], out = { rx: r.rx, ry: r.ry };
-  if (s) { if (r.rx) out.dx = Math.abs(r.rx.x - p[0]) * s; if (r.ry) out.dy = Math.abs(r.ry.y - p[1]) * s; if (o) { out.X = (p[0] - o[0]) * s; out.Y = (o[1] - p[1]) * s; } }
+  if (s) { if (r.rx) out.dx = Math.abs(r.rx.x - p[0]) * s; if (r.ry) out.dy = Math.abs(r.ry.y - p[1]) * s; if (o) { out.X = (p[0] - o[0]) * s; out.Y = (o[1] - p[1]) * s; }
+    if (doc && doc.type === 'cad' && doc.cad && doc.cad.toWorld) out.grid = Grid.callout(doc.cad, p, proj.hidden || {}, doc.cad.unitM || s * doc.cad.k, proj.units); }
   const ln = L => doc.type === 'cad' && L != null ? doc.cad.layerNames[L] : ''; out.rxLayer = r.rx ? ln(r.rx.L) : ''; out.ryLayer = r.ry ? ln(r.ry.L) : '';
   return out;
 }
 function sleeveText(it) { const i = sleeveInfo(it), u = proj.units; if (!scaleOf(it.page)) return 'no scale';
-  return (i.X != null ? 'X ' + Units.fmtLen(i.X, u) + ', Y ' + Units.fmtLen(i.Y, u) : 'no origin'); }
+  const xy = i.X != null ? 'X ' + Units.fmtLen(i.X, u) + ', Y ' + Units.fmtLen(i.Y, u) : 'no origin';
+  return i.grid ? xy + '  ' + i.grid : xy; }
 const _drawItem = drawItem; drawItem = function (it, g, isDraft) {
   if (it.type !== 'sleeve') return _drawItem(it, g, isDraft);
   const grp = el('g', { 'data-id': it.id }, g), [x, y] = it.pts[0], c = it.color, inf = sleeveInfo(it), u = proj.units, R = 9 / zoom;
@@ -704,6 +694,7 @@ const _drawItem = drawItem; drawItem = function (it, g, isDraft) {
   el('circle', { cx: x, cy: y, r: R, fill: '#fff', 'fill-opacity': 0.85, stroke: c, 'stroke-width': 2.5 / zoom }, grp);
   el('path', { d: `M${x - R} ${y}H${x + R}M${x} ${y - R}V${y + R}`, stroke: c, 'stroke-width': 1.2 / zoom }, grp);
   label(grp, x, y - R - 4 / zoom, sleeveName(it) + ' ' + (it.size || '') + (it.label ? ' ' + it.label : '') + sleeveHtLabel(it), c);
+  if (inf.grid) label(grp, x, y + R + 12 / zoom, inf.grid, c);
   if (it.id === selId) el('rect', { x: x - 6 / zoom, y: y - 6 / zoom, width: 12 / zoom, height: 12 / zoom, fill: 'none', stroke: '#1976d2', 'stroke-width': 2 / zoom, 'data-v': 0, class: 'handle' }, grp);
 };
 const _draw4 = draw; draw = function () { _draw4(); const o = proj && proj.origins && proj.origins[page]; if (!o) return; const g = el('g', { 'pointer-events': 'none' }, svg), s = 14 / zoom, w = 2 / zoom;
@@ -716,60 +707,17 @@ $('#eSize').addEventListener('change', e => { const it = selItem(); if (it) { it
 function buildSleeveCSV() {
   const u = proj.units, f = v => v == null ? '' : Units.fmtLen(v, u), dec = v => v == null ? '' : u === 'mm' ? (v * 1000).toFixed(1) : (Units.isMet(u) ? v : v / Units.FT).toFixed(4), lu = u === 'mm' ? 'mm' : Units.isMet(u) ? 'm' : 'ft';
   const rows = [['Sleeve schedule', proj.name], ['Origin', Object.keys(proj.origins || {}).length ? 'set (Y up)' : 'not set'], [],
-    ['ID', 'Size', 'Label', 'X from origin', 'Y from origin', `X (${lu})`, `Y (${lu})`, 'Offset to nearest vertical line', 'Offset to nearest horizontal line', `Offset X (${lu})`, `Offset Y (${lu})`, 'Ref X layer', 'Ref Y layer', 'Level / page', 'Note', 'Top of slab', 'Slab thickness', 'Top of sleeve', 'Bottom of sleeve', 'Sleeve length', 'Height from']];
+    ['ID', 'Size', 'Label', 'X from origin', 'Y from origin', `X (${lu})`, `Y (${lu})`, 'Offset to nearest vertical line', 'Offset to nearest horizontal line', `Offset X (${lu})`, `Offset Y (${lu})`, 'Ref X layer', 'Ref Y layer', 'Level / page', 'Note', 'Type', 'Grid offset', 'Top of slab', 'Slab thickness', 'Top of sleeve', 'Bottom of sleeve', 'Sleeve length', 'Height from']];
   proj.items.filter(i => i.type === 'sleeve').forEach(it => { const i = sleeveInfo(it);
-    rows.push([sleeveName(it), it.size || '', it.label || '', f(i.X), f(i.Y), dec(i.X), dec(i.Y), f(i.dx), f(i.dy), dec(i.dx), dec(i.dy), i.rxLayer, i.ryLayer, doc.type === 'cad' ? proj.name : 'Page ' + it.page, it.text || '', ...(h => [fmtEl(h.tos), h.thk != null ? fmtThk(h.thk) : '', fmtEl(h.top), fmtEl(h.bot), h.len != null ? fmtThk(h.len) : '', h.src])(sleeveHeight(it))]); });
+    rows.push([sleeveName(it), it.size || '', it.label || '', f(i.X), f(i.Y), dec(i.X), dec(i.Y), f(i.dx), f(i.dy), dec(i.dx), dec(i.dy), i.rxLayer, i.ryLayer, doc.type === 'cad' ? proj.name : 'Page ' + it.page, it.text || '', it.sleeveType || '', i.grid || '', ...(h => [fmtEl(h.tos), h.thk != null ? fmtThk(h.thk) : '', fmtEl(h.top), fmtEl(h.bot), h.len != null ? fmtThk(h.len) : '', h.src])(sleeveHeight(it))]); });
   return rows.map(r => r.map(csvCell).join(',')).join('\r\n');
 }
 $('#sleeveCsvBtn').onclick = () => { if (!proj) return; if (!proj.items.some(i => i.type === 'sleeve')) return toast('No sleeves yet. Use the Sleeve tool.'); download('\ufeff' + buildSleeveCSV(), proj.name + '-sleeves.csv', 'text/csv'); };
 Object.assign(window.PM, { buildSleeveCSV, sleeveInfo }); Object.defineProperty(window.PM, 'origins', { get: () => proj.origins });
-// ---- Find sleeves (CAD auto-detection) ----
-const SLV_KEYS = ['SLEEVE', 'SLV', 'MANCHON', 'PEN', 'PENETRATION', 'CORE', 'CORING', 'FOURREAU'];
-function slvMatch(s) { s = String(s || '').toUpperCase(); if (/SLEEVE|MANCHON|PENETRATION|FOURREAU|CORING/.test(s)) return true; return s.split(/[^A-Z0-9]+/).some(t => SLV_KEYS.some(k => t.startsWith(k) && /^\d*$/.test(t.slice(k.length)))); }
-const NOMINAL_IN = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 14, 16];
-const inStr = v => { const w = Math.floor(v + 1e-9), f = v - w; const fr = { 0.25: '1/4', 0.5: '1/2', 0.75: '3/4' }[Math.round(f * 4) / 4] || ''; return (w ? w + (fr ? '-' + fr : '') : fr) + '"'; };
-function parseSize(s) { // returns size label or null
-  s = String(s || '').replace(/\\[A-Za-z][^;]*;/g, '').trim(); let m;
-  if ((m = s.match(/\bDN\s*(\d{2,4})\b/i))) return 'DN' + m[1];
-  if ((m = s.match(/(\d+(?:\.\d+)?)\s*mm\b/i))) return m[1] + 'mm';
-  if ((m = s.match(/(?:^|[^\d\/.])(\d+)[- ](\d)\/(\d)\s*(?:"|''|in\b|po\b)/i))) return m[1] + '-' + m[2] + '/' + m[3] + '"';
-  if ((m = s.match(/(?:^|[^\d\/.])(\d)\/(\d)\s*(?:"|''|in\b|po\b)/i))) return m[1] + '/' + m[2] + '"';
-  if ((m = s.match(/(?:^|[^\d\/.])(\d+(?:\.\d+)?)\s*(?:"|''|in\b|inch|po\b)/i))) return m[1] + '"';
-  if ((m = s.match(/[ØøΦ⌀]\s*(\d+(?:\.\d+)?)/))) return m[1] + (proj && Units.isMet(proj.units) ? 'mm' : '"');
-  return null; }
-function sizeFromDia(rPage) { const s = scaleOf(page); if (!s || !rPage) return { size: '', raw: '' }; const dm = 2 * rPage * s, din = dm / Units.IN;
-  const raw = Units.isMet(proj.units) ? 'Ø ' + (dm * 1000).toFixed(0) + ' mm' : 'Ø ' + din.toFixed(2) + '"'; let best = NOMINAL_IN[0]; for (const n of NOMINAL_IN) if (Math.abs(n - din) < Math.abs(best - din)) best = n; return { size: inStr(best), raw }; }
-function nearText(x, y, R) { let best = null, bd = R; for (const t of doc.cad.texts) { if ((proj.hidden || {})[doc.cad.layerNames[t.L]]) continue; const d = Math.hypot(t.x - x, t.y - y); if (d <= bd) { const sz = parseSize(t.text); if (sz) { bd = d; best = sz; } } } return best; }
-// size written in a block name, e.g. "SLV_Round_FLR_4", "Sleeve 3in", "PEN-100mm" (only for unscaled inserts)
-function sizeFromName(n) { n = String(n || ''); const p = parseSize(n); if (p) return p; const t = n.split(/[^0-9.\/-]+/).filter(Boolean).pop(); if (!t || !/^\d+(?:\.\d+)?$/.test(t)) return null; const v = +t; return NOMINAL_IN.includes(v) && /[_\s-]\d+(?:\.\d+)?[_\s-]*$/.test(n) ? inStr(v) : null; }
-function candSize(c) { // attributes > size in block name > nearby text > diameter
-  const dia = sizeFromDia(c.r); let size = null, src = '';
-  if (c.attrs) { const pref = c.attrs.slice().sort((a, b) => (/SIZE|DIA|TAILLE|DIAM/i.test(b.tag) ? 1 : 0) - (/SIZE|DIA|TAILLE|DIAM/i.test(a.tag) ? 1 : 0) || (a.def ? 1 : 0) - (b.def ? 1 : 0));
-    for (const a of pref) { const s = parseSize(a.value); if (s) { size = s; src = a.def ? 'block default' : 'attribute'; break; } } }
-  if (!size && c.kind === 'insert' && Math.abs((c.sc ?? 1) - 1) < 0.01) { const s = sizeFromName(c.name); if (s) { size = s; src = 'block name'; } }
-  if (!size) { const R = Math.max(4 * (c.r || 0), 0.015 * Math.min(doc.cad.w, doc.cad.h)); const t = nearText(c.x, c.y, R); if (t) { size = t; src = 'nearby text'; } }
-  if (!size && dia.size) { size = dia.size; src = 'diameter'; }
-  return { size: size || '?', src: src || 'unknown', raw: dia.raw }; }
-// Revit and some exporters append the same view name to every block name (e.g. "... - SLAB SLEEVING LAYOUT"); strip it before keyword matching
-function commonSuffix(M) { if (M._sfx != null) return M._sfx; const names = [...new Set(M.inserts.map(s => s.name))]; let best = '';
-  if (names.length >= 5) for (const seed of names.slice(0, 20)) for (let L = Math.max(6, best.length + 1); L <= seed.length - 1; L++) { const sx = seed.slice(-L); let n = 0; for (const x of names) if (x.endsWith(sx)) n++; if (n >= 0.6 * names.length) best = sx; else break; }
-  return (M._sfx = best); }
-function shortName(n, sfx, tidy) { n = String(n || ''); if (sfx && n.endsWith(sfx) && n.length > sfx.length) n = n.slice(0, -sfx.length); if (tidy) n = n.replace(/[-_ ]+V?\d{3,}[-_ ]*$/, '').replace(/[-_ ]+$/, ''); return n; }
+// ---- Find sleeves (CAD auto-detection). Matching, sizing and type live in sleeves.js. ----
+const slvMatch = Sleeves.slvMatch;
 function findCandidates(mode, pick) {
-  const M = doc.cad, hid = proj.hidden || {}, out = [], vis = L => !hid[M.layerNames[L]];
-  const insOK = new Set();
-  const sfx = commonSuffix(M); M._sfx = sfx;
-  M.inserts.forEach((s, i) => { if (!vis(s.L)) return; const ok = mode === 'pick' ? (pick.kind === 'insert' && s.name === pick.name) : (slvMatch(shortName(s.name, sfx)) || slvMatch(M.layerNames[s.L]));
-    if (ok && !s.parents.some(p => insOK.has(p))) { insOK.add(i); out.push({ kind: 'insert', x: s.x, y: s.y, r: s.r, sc: s.sc, name: shortName(s.name, sfx, true), full: s.name, L: s.L, attrs: s.attrs }); } });
-  M.circles.forEach(c => { if (!vis(c.L) || c.parents.some(p => insOK.has(p))) return;
-    const ok = mode === 'pick' ? (pick.kind === 'circle' && c.L === pick.L && Math.abs(c.r - pick.r) <= pick.r * 0.01) : slvMatch(M.layerNames[c.L]);
-    if (ok) out.push({ kind: 'circle', x: c.x, y: c.y, r: c.r, name: '', L: c.L }); });
-  // de-duplicate coincident candidates and mark ones already added as sleeves
-  const tol = 1e-4 * Math.max(M.w, M.h), res = [];
-  for (const c of out) { if (res.some(o => Math.hypot(o.x - c.x, o.y - c.y) < tol)) continue; res.push(c); }
-  const sleeves = proj.items.filter(i => i.type === 'sleeve' && i.page === page);
-  res.forEach((c, i) => { Object.assign(c, candSize(c)); c.id = 'c' + i; c.layer = M.layerNames[c.L]; c.dup = sleeves.some(s => Math.hypot(s.pts[0][0] - c.x, s.pts[0][1] - c.y) < tol); c.on = !c.dup; });
-  return res;
+  return Sleeves.findCandidates(doc.cad, { hidden: proj.hidden || {}, sleeves: proj.items.filter(i => i.type === 'sleeve' && i.page === page), scale: scaleOf(page), units: proj.units, mode, pick });
 }
 let FS = null; // review state {cands, mode}
 function startFind(mode, pick) {
@@ -786,7 +734,7 @@ function renderFind() {
   $('#findSum').textContent = `${FS.cands.length} found, ${sel} selected` + (FS.cands.some(c => c.dup) ? `, ${FS.cands.filter(c => c.dup).length} already added` : '');
   $('#findList').innerHTML = findGroups().map(g => { const n = g.items.filter(c => c.on).length, all = g.items.filter(c => !c.dup);
     return `<div class="fgrp"><label class="fhead"><input type="checkbox" data-grp="${esc(g.key)}" ${all.length && n === all.length ? 'checked' : ''} ${all.length ? '' : 'disabled'}><b>${esc(g.size)}</b><span>${g.items.length} ea</span><small>${esc(g.layer)}${g.name ? ' / ' + esc(g.name) : ' / circle'}</small></label>` +
-      g.items.map(c => `<label class="fitem ${c.dup ? 'dup' : ''}" data-cid="${c.id}"><input type="checkbox" data-cid="${c.id}" ${c.on ? 'checked' : ''} ${c.dup ? 'disabled' : ''}><span>${esc(c.size)}</span><small>${c.dup ? 'already added' : esc(c.src)}${c.raw && c.kind === 'circle' ? ' - ' + esc(c.raw) : ''}${xy(c) ? ' - ' + xy(c) : ''}</small></label>`).join('') + '</div>'; }).join('') || '<small>Nothing found.</small>';
+      g.items.map(c => `<label class="fitem ${c.dup ? 'dup' : ''}" data-cid="${c.id}"><input type="checkbox" data-cid="${c.id}" ${c.on ? 'checked' : ''} ${c.dup ? 'disabled' : ''}><span>${esc(c.size)}</span><small>${c.dup ? 'already added' : esc(c.src)}${c.sleeveType ? ' - ' + esc(c.sleeveType) : ''}${c.raw && c.kind === 'circle' ? ' - ' + esc(c.raw) : ''}${xy(c) ? ' - ' + xy(c) : ''}</small></label>`).join('') + '</div>'; }).join('') || '<small>Nothing found.</small>';
   $('#findAdd').disabled = !sel; $('#findAdd').textContent = `Add ${sel} as sleeves`;
 }
 $('#findList').addEventListener('change', e => { const t = e.target; if (t.dataset.grp != null) { const g = findGroups().find(x => x.key === t.dataset.grp); g.items.forEach(c => { if (!c.dup) c.on = t.checked; }); }
@@ -797,7 +745,7 @@ $('#findNone').onclick = () => { FS.cands.forEach(c => c.on = false); renderFind
 $('#findCancel').onclick = endFind;
 $('#findPick').onclick = () => { document.body.classList.add('pickmode'); setTool('select'); toast('Click one sleeve symbol (block or circle) on the plan.', 5000); };
 $('#findAdd').onclick = () => { const add = FS.cands.filter(c => c.on && !c.dup); if (!add.length) return;
-  for (const c of add) proj.items.push({ id: uid(), type: 'sleeve', page, pts: [[c.x, c.y]], color: $('#color').value, label: '', size: c.size === '?' ? '' : c.size, layer: c.layer, text: [c.name ? 'Block ' + c.name : 'Circle', 'layer ' + c.layer, c.raw].filter(Boolean).join(', '), src: 'auto' });
+  for (const c of add) proj.items.push({ id: uid(), type: 'sleeve', page, pts: [[c.x, c.y]], color: $('#color').value, label: '', size: c.size === '?' ? '' : c.size, sleeveType: c.sleeveType || '', layer: c.layer, text: [c.sleeveType, c.name ? 'Block ' + c.name : 'Circle', 'layer ' + c.layer, c.raw].filter(Boolean).join(', '), src: 'auto' });
   changed(); toast(`Added ${add.length} sleeve${add.length > 1 ? 's' : ''}. Undo removes them in one step.`, 5000); endFind(); };
 $('#findBtn').onclick = () => startFind('auto');
 // pick-one: next click on the plan selects nearest insert or circle
@@ -880,7 +828,7 @@ setNum($('#eThk'), parseThk, v => { const it = selItem(); if (it) { if (v == nul
 setNum($('#eExt'), parseThk, v => { const it = selItem(); if (it) { if (v == null) delete it.ext; else it.ext = v; } });
 // Slab zone tool: draws an area that is marked as a slab zone
 (function () { const b = document.createElement('button'); b.id = 'zoneTool'; b.className = 'tool'; b.title = 'Slab zone: draw an area with its own top of slab and thickness'; b.dataset.icon = 'area'; b.innerHTML = '<span class="t">Slab zone</span>';
-  const ar = document.querySelector('[data-tool=area]'); ar.after(b); try { const ic = ar.querySelector('svg'); if (ic) b.prepend(ic.cloneNode(true)); } catch (e) { } })();
+  const host = document.querySelector('[data-tool=origin]'); host.after(b); try { const ic = document.querySelector('[data-tool=area] svg'); if (ic) b.prepend(ic.cloneNode(true)); } catch (e) { } })();
 let zoneNext = false;
 $('#zoneTool').onclick = () => { setTool('area'); zoneNext = true; document.querySelectorAll('.tool').forEach(x => x.classList.toggle('active', x.id === 'zoneTool')); toast('Draw the slab zone outline, then Finish. Then enter its top of slab and thickness.', 5000); };
 const _setToolZ = setTool; setTool = function (t) { if (zoneNext && t !== 'area') zoneNext = false; _setToolZ(t); };
@@ -976,28 +924,14 @@ dtd.addEventListener('click', e => { const b = e.target.closest('[data-t]'); if 
 Object.assign(window.PM, { deleteItems, nearHit }); Object.defineProperty(window.PM, 'selId', { get: () => selId });
 
 // ---- Auto straight: lock near-horizontal / vertical / 45 degree / drawing-angle segments, and align with existing points ----
-const ST_TOL = 5 * Math.PI / 180;
 let domAng = null; // dominant drawing angle (rotated CAD grids), radians in [0, 90deg)
 function dominantAngle() { if (domAng !== null) return domAng; const G = geomCache[page]; if (!G || !G.ready) return 0; domAng = 0; if (!G.cad) return domAng;
   const { sx } = G.cad, n = sx.length / 4, bins = new Float64Array(90); for (let i = 0; i < n; i++) { const dx = sx[4 * i + 2] - sx[4 * i], dy = sx[4 * i + 3] - sx[4 * i + 1], L = Math.hypot(dx, dy); if (!L) continue; let a = Math.atan2(dy, dx) * 180 / Math.PI; a = ((a % 90) + 90) % 90; bins[Math.round(a) % 90] += L; }
   let b = 0; for (let i = 1; i < 90; i++) if (bins[i] > bins[b]) b = i; const tot = bins.reduce((x, y) => x + y, 0);
   if (b > 2 && b < 88 && b !== 45 && bins[b] > 0.25 * tot) domAng = b * Math.PI / 180; return domAng; }
-function straightDirs() { const D = [0, Math.PI / 2, Math.PI / 4, 3 * Math.PI / 4], a = dominantAngle(); if (a) D.push(a, a + Math.PI / 2); return D; }
+function straightDirs() { const D = Straight.DIRS.slice(), a = dominantAngle(); if (a) D.push(a, a + Math.PI / 2); return D; }
 function alignPts(exclude, prev) { const out = []; if (!proj) return out; for (const it of proj.items) if (it.page === page) for (const q of it.pts) if (q !== exclude) out.push(q); if (draft) for (const q of draft.pts) if (q !== exclude && q !== prev) out.push(q); return out; }
-function straighten(p, prev, tol, exclude) { const dx = p[0] - prev[0], dy = p[1] - prev[1], L = Math.hypot(dx, dy); if (L < 1e-9) return null;
-  const ang = Math.atan2(dy, dx); let best = null, bd = ST_TOL;
-  for (const d of straightDirs()) { let df = Math.abs(((ang - d) % Math.PI + Math.PI * 1.5) % Math.PI - Math.PI / 2); if (df < bd) { bd = df; best = d; } }
-  const A = alignPts(exclude, prev); let ax = null, ay = null, bx = tol, by = tol;
-  for (const q of A) { if (Math.abs(q[0] - p[0]) < bx) { bx = Math.abs(q[0] - p[0]); ax = q; } if (Math.abs(q[1] - p[1]) < by) { by = Math.abs(q[1] - p[1]); ay = q; } }
-  if (best === null && !ax && !ay) return null;
-  let q = p.slice(), dir = null;
-  if (best !== null) { dir = [Math.cos(best), Math.sin(best)]; const t = dx * dir[0] + dy * dir[1]; q = [prev[0] + t * dir[0], prev[1] + t * dir[1]];
-    const hz = Math.abs(dir[1]) < 1e-6, vt = Math.abs(dir[0]) < 1e-6;
-    if (hz) { ay = null; if (ax) q = [ax[0], prev[1]]; } else if (vt) { ax = null; if (ay) q = [prev[0], ay[1]]; }
-    else if (ax) { q = [ax[0], prev[1] + (ax[0] - prev[0]) / dir[0] * dir[1]]; ay = null; } else if (ay) { q = [prev[0] + (ay[1] - prev[1]) / dir[1] * dir[0], ay[1]]; } }
-  else { if (ax) q[0] = ax[0]; if (ay) q[1] = ay[1]; }
-  if (ax && Math.abs(q[0] - ax[0]) > 1e-9) ax = null; if (ay && Math.abs(q[1] - ay[1]) > 1e-9) ay = null;
-  return { q, prev: prev.slice(), dir, ax, ay, straight: best !== null }; }
+function straighten(p, prev, tol, exclude) { return Straight.straighten(p, prev, tol, straightDirs(), alignPts(exclude, prev)); }
 function straightInfo(q, prev, exclude) { const s = straighten(q, prev, 1e-6, exclude); return s && s.straight && Math.hypot(s.q[0] - q[0], s.q[1] - q[1]) < 1e-6 ? s : null; }
 function keepStraight(h, st, prev, r) { // snapped point lies on a drawing line: slide along it to meet the straight ray
   if (!st.dir) return null; if (h.kind !== 'line') { return Math.hypot(h.p[0] - st.q[0], h.p[1] - st.q[1]) < 1e-6 ? h.p.slice() : null; }
@@ -1024,3 +958,95 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
   v.addEventListener('selectstart', e => { if (plan(e)) e.preventDefault(); });
   const clr = () => { const s = window.getSelection && getSelection(); if (s && s.rangeCount && !(document.activeElement && document.activeElement.matches('input,textarea'))) s.removeAllRanges(); };
   document.addEventListener('touchend', clr, { passive: true }); document.addEventListener('touchcancel', clr, { passive: true }); })();
+
+// ---------- full screen and print ----------
+function loadImgEl(src) { return new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('Could not draw the markups')); im.src = src; }); }
+function fsSupport() { return { requestFullscreen: typeof vpEl.requestFullscreen === 'function', webkitRequestFullscreen: typeof vpEl.webkitRequestFullscreen === 'function', iphone: View.isIphone(navigator.userAgent) }; }
+function fsApiOn() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+function fsOn() { return fsApiOn() || document.body.classList.contains('immersive'); }
+function syncFsBtn() {
+  const on = fsOn(); document.body.classList.toggle('fs', on);
+  const b = $('#fullBtn'); if (!b) return; b.classList.toggle('on', on); b.title = on ? 'Exit full screen' : 'View full screen';
+  const t = b.querySelector('.t'); if (t) t.textContent = on ? 'Exit' : 'Full';
+  const ic = b.querySelector('svg'); if (ic) ic.innerHTML = ICONS[on ? 'exitfs' : 'full'];
+}
+function afterFrame(fn) { requestAnimationFrame(() => requestAnimationFrame(fn)); }
+function enterImmersive() { document.body.classList.add('immersive'); const m = $('#moreMenu'); if (m) m.hidden = true; syncFsBtn(); afterFrame(() => { if (doc) fitPage(); }); }
+function exitImmersive() { document.body.classList.remove('immersive'); syncFsBtn(); afterFrame(() => { if (doc) fitPage(); }); }
+async function enterApi() {
+  const req = vpEl.requestFullscreen || vpEl.webkitRequestFullscreen;
+  try { await req.call(vpEl); } catch (e) { enterImmersive(); }
+}
+function exitApi() { const exit = document.exitFullscreen || document.webkitExitFullscreen; if (exit) return exit.call(document); }
+function toggleFullscreen() {
+  if (document.body.classList.contains('immersive')) return exitImmersive();
+  if (fsApiOn()) return exitApi();
+  if (View.fullscreenStrategy(fsSupport()) === 'api') enterApi(); else enterImmersive();
+}
+['fullscreenchange', 'webkitfullscreenchange'].forEach(ev => document.addEventListener(ev, () => { syncFsBtn(); afterFrame(() => { if (doc) fitPage(); }); }));
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('immersive') && !document.querySelector('dialog[open]')) exitImmersive(); });
+$('#fullBtn').onclick = e => { e.stopPropagation(); toggleFullscreen(); };
+$('#fsExit').onclick = () => { if (document.body.classList.contains('immersive')) exitImmersive(); else exitApi(); };
+
+let printUrl = '';
+async function composePrintCanvas() {
+  const { w, h } = doc.sizes[page];
+  const plan = View.printPlan(w, h, { dpi: 192, maxPixels: isPhoneDev ? 6e6 : 14e6, maxEdge: isPhoneDev ? 3072 : 4096 });
+  const r = Math.min(plan.pixels.w / w, plan.pixels.h / h);
+  const cw = Math.max(1, Math.round(w * r)), ch = Math.max(1, Math.round(h * r));
+  const off = document.createElement('canvas'); off.width = cw; off.height = ch;
+  const ctx = off.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
+  printLock = true;
+  try {
+    if (renderTask) { try { renderTask.cancel(); } catch (e) { } renderTask = null; }
+    if (doc.type === 'pdf') {
+      const p = await doc.pdf.getPage(page); const vp = p.getViewport({ scale: r });
+      const task = p.render({ canvasContext: ctx, viewport: vp });
+      try { await task.promise; } catch (e) { if (!e || e.name !== 'RenderingCancelledException') throw e; }
+    } else if (doc.type === 'cad') CAD.draw(ctx, doc.cad, r, 0, 0, (proj && proj.hidden) || {}, { x0: 0, y0: 0, w, h });
+    else if (doc.img) ctx.drawImage(doc.img, 0, 0, cw, ch);
+    const clone = svg.cloneNode(true);
+    clone.querySelectorAll('.handle,.hit,[data-guide]').forEach(n => n.remove());
+    clone.setAttribute('width', String(cw)); clone.setAttribute('height', String(ch)); clone.setAttribute('viewBox', `0 0 ${w} ${h}`);
+    clone.querySelectorAll('text').forEach(t => { if (!t.getAttribute('font-family')) t.setAttribute('font-family', 'sans-serif'); });
+    const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(clone)], { type: 'image/svg+xml;charset=utf-8' }));
+    try { const img = await loadImgEl(url); ctx.drawImage(img, 0, 0, cw, ch); } finally { URL.revokeObjectURL(url); }
+  } finally { printLock = false; scheduleRender(40); }
+  return { canvas: off, plan, cw, ch };
+}
+function fillPrintQty() {
+  const u = proj.units === 'mm' ? 'millimetres' : proj.units === 'met' ? 'metres' : 'feet-inches';
+  const rows = groups().map(g => `<tr><td><span class="sw" style="background:${g.color}"></span></td><td>${esc(TYPE_NAMES[g.type] + (g.label ? ' — ' + g.label : ''))}</td><td class="n">${esc(fmtGroup(g))}</td><td class="n">${g.n}</td></tr>`).join('');
+  $('#printQty').innerHTML = `<h1>${esc(proj.name || 'Takeoff')}</h1><p>Quantities. Units: ${esc(u)}.</p><table><thead><tr><th></th><th>Item</th><th class="n">Total</th><th class="n">Count</th></tr></thead><tbody>${rows || '<tr><td colspan="4">No measurements yet.</td></tr>'}</tbody></table>`;
+}
+async function preparePrint() {
+  const { canvas, plan, cw, ch } = await composePrintCanvas();
+  const blob = await new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error('empty image')), 'image/png'));
+  canvas.width = canvas.height = 0;
+  if (printUrl) URL.revokeObjectURL(printUrl);
+  printUrl = URL.createObjectURL(blob);
+  const img = $('#printImg'); img.src = printUrl; img.width = cw; img.height = ch;
+  try { await img.decode(); } catch (e) { }
+  $('#printCap').textContent = `${proj ? proj.name : 'Plan'} — page ${page} of ${doc.numPages}. ${$('#scaleInfo').textContent || ''}`;
+  if (proj) fillPrintQty();
+  let css = document.getElementById('printPageCss'); if (!css) { css = document.createElement('style'); css.id = 'printPageCss'; document.head.appendChild(css); }
+  css.textContent = `@page { size: letter ${plan.orientation}; margin: 0.5in; }`;
+  $('#printRoot').dataset.orientation = plan.orientation;
+  $('#printRoot').classList.add('with-qty');
+  return plan;
+}
+$('#printBtn').onclick = async () => {
+  if (!doc) return toast('Open a plan to print.');
+  toast('Preparing the sheet…', 20000);
+  try { await preparePrint(); $('#toast').style.display = 'none'; $('#printQtyOpt').checked = true; $('#printDlg').showModal(); }
+  catch (e) { console.error(e); toast('Could not prepare the print: ' + e.message, 5000); }
+};
+let printArmed = false;
+$('#printGo').onclick = () => {
+  if (printArmed) return; printArmed = true;
+  $('#printRoot').classList.toggle('with-qty', $('#printQtyOpt').checked);
+  window.print(); $('#printDlg').close();
+  setTimeout(() => { printArmed = false; }, 600);
+};
+Object.assign(window.PM, { fullscreenStrategy: () => View.fullscreenStrategy(fsSupport()), enterImmersive, exitImmersive, toggleFullscreen, preparePrint });
+Object.defineProperty(window.PM, 'printOrientation', { get() { return $('#printRoot').dataset.orientation || ''; } });

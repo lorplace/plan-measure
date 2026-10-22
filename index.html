@@ -6,6 +6,7 @@
 <link rel="stylesheet" href="style.css"></head>
 <body>
 <header id="bar">
+  <span class="brand">Plan Measure</span>
   <label class="btn primary" data-icon="open">Open plan<input id="file" type="file" accept="application/pdf,image/*,.dxf,.dwg,.pmproj" hidden></label>
   <button id="saveBtn" class="btn" title="Save project" data-icon="save">Save</button>
   <button id="projBtn" class="btn" title="Saved projects" data-icon="folder">Projects</button>
@@ -28,17 +29,23 @@
   <button id="panelBtn" class="btn" data-icon="panel" title="Show/hide takeoff panel">Takeoff</button>
 </header>
 <nav id="tools">
+  <span class="grp">View</span>
   <button data-tool="select" data-icon="select" class="tool active" title="Select / edit (V)">Select</button>
   <button id="slvCountTool" class="tool" data-icon="count" title="Sleeve count">Sleeves</button>
   <button data-tool="pan" data-icon="hand" class="tool" title="Pan (H)">Pan</button>
+  <button id="fullBtn" type="button" class="tool" data-icon="full" title="View full screen">Full</button>
+  <button id="printBtn" type="button" class="tool" data-icon="print" title="Print this sheet">Print</button>
+  <span class="grp">Scale</span>
   <button data-tool="calibrate" data-icon="cal" class="tool" title="Calibrate scale with 2 points (K)">Calibrate</button>
+  <span class="grp">Measure</span>
   <button data-tool="line" data-icon="line" class="tool" title="Length (L)">Length</button>
-  <button data-tool="poly" data-icon="poly" class="tool" title="Pipe run / polyline (P)">Pipe run</button>
   <button data-tool="area" data-icon="area" class="tool" title="Area (A)">Area</button>
   <button data-tool="count" data-icon="count" class="tool" title="Count fixtures (C)">Count</button>
+  <button data-tool="poly" data-icon="poly" class="tool" title="Pipe run / polyline (P)">Run</button>
+  <button data-tool="text" data-icon="text" class="tool" title="Text note (T)">Note</button>
+  <span class="grp">Sleeves</span>
   <button data-tool="sleeve" data-icon="sleeve" class="tool" title="Sleeve (E)">Sleeve</button>
   <button data-tool="origin" data-icon="origin" class="tool" title="Set 0,0 origin (O)">Origin</button>
-  <button data-tool="text" data-icon="text" class="tool" title="Text note (T)">Note</button>
   <span class="sep"></span><div class="opt"><label>Colour <input id="color" type="color" value="#e53935"></label></div>
   <div class="opt"><label>Label <input id="label" type="text" placeholder="e.g. WC, 3/4 PEX" size="10"></label></div>
   <div class="opt sz"><label>Size <select id="sleeveSize"><option>1/2"</option><option>3/4"</option><option>1"</option><option>1-1/2"</option><option>2"</option><option>3"</option><option selected>4"</option><option>6"</option><option>8"</option><option>10"</option><option>12"</option></select></label></div>
@@ -53,6 +60,8 @@
   <button class="btn" data-icon="redo" data-proxy="#redoBtn" id="redoMenu">Redo</button>
   <button class="btn" data-icon="ruler" data-proxy="#scaleBtn">Set scale</button>
   <button class="btn" data-icon="fit" data-proxy="#fit">Fit page</button>
+  <button class="btn" data-icon="full" data-proxy="#fullBtn">Full screen</button>
+  <button class="btn" data-icon="print" data-proxy="#printBtn">Print</button>
   <button class="btn" data-icon="save" data-proxy="#saveBtn">Save</button>
   <button class="btn" data-icon="folder" data-proxy="#projBtn">Projects</button>
   <button class="btn" data-icon="save" id="pmprojBtn">Save project file</button>
@@ -63,14 +72,14 @@
   <button class="btn" data-icon="download" data-proxy="#pdfBtn">Export PDF</button>
 </div>
 <main id="main">
-  <div id="viewport"><div id="empty"><div class="emptybox"><svg class="ic big" viewBox="0 0 24 24"><path d="M4 3h11l5 5v13H4z"/><path d="M15 3v5h5M8 13h8M8 17h5"/></svg><h2>Open a plan</h2><p>PDF, image (PNG, JPG) or CAD (DXF, DWG). Your file stays on this device.</p><button type="button" id="resumeBtn" class="btn bigbtn" hidden>Continue last project</button><label class="btn primary bigbtn">Open plan<input id="file2" type="file" accept="application/pdf,image/*,.dxf,.dwg,.pmproj" hidden></label></div></div><div id="stage"><canvas id="canvas"></canvas><svg id="svg"></svg></div></div>
+  <div id="viewport"><button id="fsExit" type="button" class="btn" data-icon="exitfs">Exit full screen</button><div id="empty"><div class="emptybox"><div class="tbk">Sheet</div><svg class="ic big" viewBox="0 0 24 24"><path d="M4 3h11l5 5v13H4z"/><path d="M15 3v5h5M8 13h8M8 17h5"/></svg><h2>Open a plan</h2><p>PDF, PNG, JPG, DXF or DWG. The file stays on this device.</p><button type="button" id="resumeBtn" class="btn bigbtn" hidden>Continue last project</button><label class="btn primary bigbtn">Open plan<input id="file2" type="file" accept="application/pdf,image/*,.dxf,.dwg,.pmproj" hidden></label></div></div><div id="stage"><canvas id="canvas"></canvas><svg id="svg"></svg></div></div>
   <aside id="side">
     <div id="sheetHandle"><span class="grip"></span><span id="sheetSum">Takeoff</span><span class="chev">Show</span></div>
     <div id="findPanel" hidden><h3>Find sleeves</h3><small id="findSum"></small>
       <div class="frow"><button type="button" id="findAll" class="btn small">Select all</button><button type="button" id="findNone" class="btn small">Select none</button><button type="button" id="findPick" class="btn small">Pick one</button></div>
       <div id="findList"></div>
       <div class="frow fbot"><button type="button" id="findAdd" class="btn primary">Add as sleeves</button><button type="button" id="findCancel" class="btn">Cancel</button></div></div>
-    <div class="sidehead"><h3>Takeoff totals</h3><button id="panelClose" class="btn icon small" data-icon="close" title="Hide panel"></button></div>
+    <div class="sidehead"><h3>Quantities</h3><button id="panelClose" class="btn icon small" data-icon="close" title="Hide panel"></button></div>
     <div id="totals"></div>
     <div id="layers" hidden><h3>CAD layers <button type="button" id="layersAll" class="btn small">Show all</button></h3><small id="cadInfo"></small><div id="layerList"></div></div>
     <h3>Items <small>(this page: <span id="pgOnly"><input type="checkbox" id="pageOnly" checked></span>)</small></h3>
@@ -107,16 +116,28 @@
   <label><input type="checkbox" id="calAll"> Apply to all pages</label>
   <menu><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary">Apply</button></menu>
 </form></dialog>
+<dialog id="printDlg"><form method="dialog">
+  <h3>Print this sheet</h3>
+  <p>The current page is fitted to the paper with its measurement labels. A wide sheet prints landscape, a tall sheet prints portrait.</p>
+  <label class="chk"><input id="printQtyOpt" type="checkbox" checked> Quantities on a second page</label>
+  <menu><button value="cancel" class="btn">Cancel</button><button id="printGo" type="button" class="btn primary">Print</button></menu>
+</form></dialog>
 <dialog id="projDlg"><form method="dialog">
   <h3>Saved projects (stored in this browser)</h3>
   <div id="projList"></div>
   <menu><button value="cancel" class="btn">Close</button></menu>
 </form></dialog>
 <div id="toast"></div>
+<div id="printRoot"><section id="printSheet"><p id="printCap"></p><img id="printImg" alt="Plan sheet with measurements"></section><section id="printQty"></section></div>
 <canvas id="loupe" width="140" height="140"></canvas>
 <script src="lib/pdf.min.js"></script>
 <script src="lib/pdf-lib.min.js"></script>
 <script src="units.js"></script>
+<script src="measure.js"></script>
+<script src="straight.js"></script>
+<script src="sleeves.js"></script>
+<script src="grid.js"></script>
+<script src="view.js"></script>
 <script src="lib/dxf-parser.js"></script>
 <script src="cad.js"></script>
 <script src="app.js"></script>
