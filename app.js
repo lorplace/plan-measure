@@ -242,6 +242,7 @@ function clickAt(p, e) {
 // pointer handling: click / drag / pan / pinch
 const pointers = new Map(); let gesture = null;
 vpEl.addEventListener('pointerdown', e => {
+  if (document.body.classList.contains('printmode')) return;
   if (!doc) return; try { vpEl.setPointerCapture(e.pointerId); } catch (err) { } pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 2) { const [a, b] = [...pointers.values()]; gesture = { kind: 'pinch', d: Math.hypot(a.x - b.x, a.y - b.y), z: zoom, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 }; hideLoupe(); return; }
   const p = pagePt(e);
@@ -421,7 +422,7 @@ const ICONS = {
  open:'<path d="M3 7h6l2 2h10v10H3z"/>', save:'<path d="M5 3h12l3 3v15H4V3z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/>', folder:'<path d="M3 6h6l2 2h10v11H3z"/><path d="M3 11h18"/>',
  left:'<path d="M15 5l-7 7 7 7"/>', right:'<path d="M9 5l7 7-7 7"/>', minus:'<path d="M5 12h14"/>', plus:'<path d="M5 12h14M12 5v14"/>',
  fit:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>', ruler:'<path d="M3 16L16 3l5 5L8 21z"/><path d="M7 12l2 2M10 9l2 2M13 6l2 2"/>',
- table:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M3 15h18M9 4v16"/>', download:'<path d="M12 3v12M7 10l5 5 5-5M4 20h16"/>',
+ table:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M3 15h18M9 4v16"/>', download:'<path d="M12 3v12M7 10l5 5 5-5M4 20h16"/>', print:'<path d="M6 9V3h12v6M6 17H4a2 2 0 01-2-2v-4a2 2 0 012-2h16a2 2 0 012 2v4a2 2 0 01-2 2h-2"/><rect x="6" y="13" width="12" height="8"/>',
  panel:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M15 4v16"/>', close:'<path d="M6 6l12 12M18 6L6 18"/>',
  undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-4"/>', redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h4"/>', snap:'<rect x="8" y="8" width="8" height="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>', sleeve:'<circle cx="12" cy="12" r="7"/><path d="M5 12h14M12 5v14"/>', origin:'<path d="M4 20V4M4 20h16"/><circle cx="4" cy="20" r="2"/>', layers:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>', find:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20"/><circle cx="10" cy="10" r="2"/>', select:'<path d="M5 3l14 8-6 2-2 6z"/>', loupe:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>', up:'<path d="M5 15l7-7 7 7"/>', down:'<path d="M5 9l7 7 7-7"/>', more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
  cal:'<path d="M4 20L20 4"/><circle cx="4" cy="20" r="2"/><circle cx="20" cy="4" r="2"/><path d="M9 9l-2-2M15 15l2 2"/>', line:'<path d="M4 18L20 6"/><path d="M4 14v8M20 2v8"/>',
@@ -436,8 +437,8 @@ $('#panelBtn').onclick = () => togglePanel(); $('#panelClose').onclick = () => t
 if (localStorage.getItem('pm-noside')) document.body.classList.add('noside');
 // ---- phone layout ----
 ICONS.more = '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>'; $('#moreBtn svg').innerHTML = ICONS.more;
-document.querySelectorAll('#moreBtn,#moreMenu [data-icon],#cancelBtn').forEach(b => { if (b.querySelector('svg')) return; const txt = b.textContent.trim(); b.textContent = '';
-  b.insertAdjacentHTML('afterbegin', `<svg class="ic" viewBox="0 0 24 24">${ICONS[b.dataset.icon]}</svg><span class="t">${txt}</span>`); });
+document.querySelectorAll('#moreBtn,#moreMenu [data-icon],#cancelBtn,#printGo,#printPdfBtn').forEach(b => { if (b.querySelector('svg')) return; const txt = b.textContent.trim(); b.textContent = '';
+  b.insertAdjacentHTML('afterbegin', `<svg class="ic" viewBox="0 0 24 24">${ICONS[b.dataset.icon] || ''}</svg><span class="t">${txt}</span>`); });
 $('#file2').addEventListener('change', onFile);
 const phoneMQ = matchMedia('(max-width: 700px)');
 const drawEls = ['.opt:nth-of-type(1)', '.opt:nth-of-type(2)'];
@@ -457,9 +458,14 @@ function updateDrawBar() {
 phoneMQ.addEventListener('change', placeDrawControls);
 const _draw = draw; draw = function () { _draw(); updateDrawBar(); updateSheet(); };
 $('#cancelBtn').onclick = () => { if (draft) { draft = null; hover = null; draw(); } else setTool('select'); };
-$('#moreBtn').onclick = e => { e.stopPropagation(); $('#moreMenu').hidden = !$('#moreMenu').hidden; };
-document.addEventListener('click', e => { if (!e.target.closest('#moreMenu,#moreBtn')) $('#moreMenu').hidden = true; });
-$('#moreMenu').addEventListener('click', e => { const b = e.target.closest('[data-proxy]'); if (!b) return; $('#moreMenu').hidden = true; $(b.dataset.proxy).click(); });
+function closeMoreMenu() { $('#moreMenu').hidden = true; $('#moreBackdrop').hidden = true; document.body.classList.remove('menuopen'); }
+function openMoreMenu() { $('#redoMenu').disabled = $('#redoBtn').disabled; $('#units2').value = $('#units').value; $('#moreMenu').hidden = false; $('#moreBackdrop').hidden = false; document.body.classList.add('menuopen'); $('#moreMenu .mscroll').scrollTop = 0; }
+$('#moreBtn').onclick = e => { e.stopPropagation(); if ($('#moreMenu').hidden) openMoreMenu(); else closeMoreMenu(); };
+$('#moreBackdrop').onclick = () => closeMoreMenu();
+document.addEventListener('click', e => { if (!$('#moreMenu').hidden && !e.target.closest('#moreMenu,#moreBtn,#moreBackdrop')) closeMoreMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#moreMenu').hidden) { e.preventDefault(); closeMoreMenu(); } });
+$('#moreMenu').addEventListener('click', e => { const b = e.target.closest('[data-proxy]'); if (!b) return; closeMoreMenu(); $(b.dataset.proxy).click(); });
+$('#moreMenu').addEventListener('touchmove', e => { if (!e.target.closest('.mscroll')) e.preventDefault(); }, { passive: false });
 $('#units2').addEventListener('change', e => { $('#units').value = e.target.value; $('#units').dispatchEvent(new Event('change')); });
 $('#scaleInfo').onclick = () => $('#scaleBtn').click();
 $('#sheetHandle').onclick = () => { document.body.classList.toggle('sheetopen'); updateSheet(); placeSelBar(); };
@@ -966,9 +972,9 @@ const _renderSCD = renderSleeveCount; renderSleeveCount = function () { _renderS
 $('#slvBody').addEventListener('click', e => { const b = e.target.closest('.rdel'); if (!b) return; e.preventDefault(); const k = b.dataset.size, ids = proj.items.filter(i => i.type === 'sleeve' && (i.size || 'No size') === k).map(i => i.id);
   if (!ids.length || !confirm(`Delete all ${ids.length} sleeve${ids.length > 1 ? 's' : ''} of size ${k}? You can undo this.`)) return; deleteItems(ids, ids.length + ' sleeves deleted'); renderSleeveCount(); });
 // menu: Clear page / Delete all of a type
-(function () { const m = $('#moreMenu'), mk = (id, txt) => { const b = document.createElement('button'); b.className = 'btn danger'; b.id = id; b.innerHTML = TRASH + txt; m.appendChild(b); return b; };
-  mk('clearPageBtn', 'Clear page').onclick = () => { if (!proj) return; m.hidden = true; const ids = proj.items.filter(i => i.page === page).map(i => i.id); if (!ids.length) return toast('Nothing on this page.'); if (confirm(`Delete all ${ids.length} items on this page? You can undo this.`)) deleteItems(ids, ids.length + ' items deleted'); };
-  mk('delTypeBtn', 'Delete all of a type').onclick = () => { if (!proj) return; m.hidden = true; const c = {}; proj.items.filter(i => i.page === page).forEach(i => c[i.type] = (c[i.type] || 0) + 1); const ks = Object.keys(c); if (!ks.length) return toast('Nothing on this page.');
+(function () { const m = $('#moreDanger') || $('#moreMenu'), mk = (id, txt) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn danger'; b.id = id; b.innerHTML = TRASH + txt; m.appendChild(b); return b; };
+  mk('clearPageBtn', 'Clear page').onclick = () => { if (!proj) return; closeMoreMenu(); const ids = proj.items.filter(i => i.page === page).map(i => i.id); if (!ids.length) return toast('Nothing on this page.'); if (confirm(`Delete all ${ids.length} items on this page? You can undo this.`)) deleteItems(ids, ids.length + ' items deleted'); };
+  mk('delTypeBtn', 'Delete all of a type').onclick = () => { if (!proj) return; closeMoreMenu(); const c = {}; proj.items.filter(i => i.page === page).forEach(i => c[i.type] = (c[i.type] || 0) + 1); const ks = Object.keys(c); if (!ks.length) return toast('Nothing on this page.');
     const d = $('#delTypeDlg'); d.querySelector('.list').innerHTML = ks.map(k => `<button type="button" class="btn danger" data-t="${k}">${TRASH}${TYPE_NAMES[k]} (${c[k]})</button>`).join(''); d.showModal(); }; })();
 const dtd = document.createElement('dialog'); dtd.id = 'delTypeDlg'; dtd.innerHTML = '<form method="dialog"><h3>Delete all of a type (this page)</h3><div class="list"></div><div class="frow"><button class="btn" value="cancel">Cancel</button></div></form>'; document.body.appendChild(dtd);
 dtd.addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (!b) return; const t = b.dataset.t, ids = proj.items.filter(i => i.page === page && i.type === t).map(i => i.id);
@@ -1024,3 +1030,214 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
   v.addEventListener('selectstart', e => { if (plan(e)) e.preventDefault(); });
   const clr = () => { const s = window.getSelection && getSelection(); if (s && s.rangeCount && !(document.activeElement && document.activeElement.matches('input,textarea'))) s.removeAllRanges(); };
   document.addEventListener('touchend', clr, { passive: true }); document.addEventListener('touchcancel', clr, { passive: true }); })();
+
+// ---- Print: adjustable area, high-res raster, window.print() + Save as PDF ----
+(function () {
+  const PAPERS = {
+    letter: { w: 792, h: 612, name: 'Letter' }, // landscape pts (1/72"); swapped for portrait
+    tabloid: { w: 1224, h: 792, name: 'Tabloid' },
+    a4: { w: 841.89, h: 595.28, name: 'A4' },
+    a3: { w: 1190.55, h: 841.89, name: 'A3' }
+  };
+  let printRect = null; // page units {x,y,w,h}
+  let drag = null;
+
+  function paperPts() {
+    const base = PAPERS[$('#printPaper').value] || PAPERS.letter;
+    const land = $('#printOrient').value !== 'portrait';
+    return land ? { pw: base.w, ph: base.h, label: base.name + ' landscape' } : { pw: base.h, ph: base.w, label: base.name + ' portrait' };
+  }
+  function syncPrintBox() {
+    const box = $('#printBox'); if (!box || !printRect) return;
+    box.style.left = printRect.x * zoom + 'px';
+    box.style.top = printRect.y * zoom + 'px';
+    box.style.width = Math.max(1, printRect.w) * zoom + 'px';
+    box.style.height = Math.max(1, printRect.h) * zoom + 'px';
+  }
+  function clampRect(r) {
+    const { w, h } = doc.sizes[page];
+    let x = Math.max(0, Math.min(r.x, w - 2)), y = Math.max(0, Math.min(r.y, h - 2));
+    let rw = Math.max(2, Math.min(r.w, w - x)), rh = Math.max(2, Math.min(r.h, h - y));
+    return { x, y, w: rw, h: rh };
+  }
+  function enterPrintMode() {
+    if (!doc || !proj) return toast('Open a plan first.');
+    closeMoreMenu();
+    const { w, h } = doc.sizes[page];
+    printRect = { x: 0, y: 0, w, h };
+    document.body.classList.add('printmode');
+    $('#printBar').hidden = false;
+    $('#printOverlay').hidden = false;
+    syncPrintBox();
+    toast('Drag the blue box to choose what to print. Corners resize.', 4000);
+  }
+  function exitPrintMode() {
+    document.body.classList.remove('printmode');
+    $('#printBar').hidden = true;
+    $('#printOverlay').hidden = true;
+    printRect = null; drag = null;
+  }
+  $('#printBtn').onclick = () => { if (document.body.classList.contains('printmode')) exitPrintMode(); else enterPrintMode(); };
+  $('#printCancel').onclick = exitPrintMode;
+  $('#printPaper').onchange = $('#printOrient').onchange = () => { };
+
+  // Keep box aligned when zoom/layout changes
+  const _layoutP = layout; layout = function () { _layoutP(); if (document.body.classList.contains('printmode')) syncPrintBox(); };
+  const _fitP = fitPage; fitPage = function () { _fitP(); if (document.body.classList.contains('printmode')) syncPrintBox(); };
+
+  const box = $('#printBox');
+  box.addEventListener('pointerdown', e => {
+    if (!printRect) return;
+    e.preventDefault(); e.stopPropagation();
+    try { box.setPointerCapture(e.pointerId); } catch (err) { }
+    const h = e.target.dataset.h || 'move';
+    const p = pagePt(e);
+    drag = { h, ox: p[0], oy: p[1], r: { ...printRect } };
+  });
+  box.addEventListener('pointermove', e => {
+    if (!drag) return;
+    e.preventDefault();
+    const p = pagePt(e), dx = p[0] - drag.ox, dy = p[1] - drag.oy, r0 = drag.r;
+    let r = { ...r0 };
+    const H = drag.h;
+    if (H === 'move') { r.x = r0.x + dx; r.y = r0.y + dy; }
+    else {
+      if (H.includes('w')) { r.x = r0.x + dx; r.w = r0.w - dx; }
+      if (H.includes('e')) { r.w = r0.w + dx; }
+      if (H.includes('n')) { r.y = r0.y + dy; r.h = r0.h - dy; }
+      if (H.includes('s')) { r.h = r0.h + dy; }
+      if (r.w < 2) { if (H.includes('w')) r.x = r0.x + r0.w - 2; r.w = 2; }
+      if (r.h < 2) { if (H.includes('n')) r.y = r0.y + r0.h - 2; r.h = 2; }
+    }
+    printRect = clampRect(r); syncPrintBox();
+  });
+  const endDrag = () => { drag = null; };
+  box.addEventListener('pointerup', endDrag); box.addEventListener('pointercancel', endDrag);
+
+  async function renderRegionCanvas(rect, targetW) {
+    const r = Math.max(0.5, targetW / rect.w);
+    const cw = Math.max(1, Math.round(rect.w * r)), ch = Math.max(1, Math.round(rect.h * r));
+    const maxPx = 16e6; let rr = r;
+    if (cw * ch > maxPx) { rr = Math.sqrt(maxPx / (rect.w * rect.h)); }
+    const W = Math.max(1, Math.round(rect.w * rr)), H = Math.max(1, Math.round(rect.h * rr));
+    const off = document.createElement('canvas'); off.width = W; off.height = H; const octx = off.getContext('2d');
+    octx.fillStyle = '#fff'; octx.fillRect(0, 0, W, H);
+    if (doc.type === 'pdf') {
+      const pg = await doc.pdf.getPage(page); const vp = pg.getViewport({ scale: rr });
+      await pg.render({ canvasContext: octx, viewport: vp, transform: [1, 0, 0, 1, -rect.x * rr, -rect.y * rr] }).promise;
+    } else if (doc.type === 'cad') {
+      CAD.draw(octx, doc.cad, rr, -rect.x * rr, -rect.y * rr, (proj && proj.hidden) || {}, { x0: rect.x, y0: rect.y, w: rect.w, h: rect.h });
+    } else {
+      octx.drawImage(doc.img, rect.x, rect.y, rect.w, rect.h, 0, 0, W, H);
+    }
+    // Overlay markups: temporarily set zoom so stroke/font page-units rasterize to ~2.5–3 pt at print DPI
+    const oldZ = zoom, prevSel = selId;
+    zoom = rr / 2.5; selId = null;
+    try {
+      draw();
+      const clone = svg.cloneNode(true);
+      clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      clone.setAttribute('viewBox', `${rect.x} ${rect.y} ${rect.w} ${rect.h}`);
+      clone.setAttribute('width', String(W)); clone.setAttribute('height', String(H));
+      const xml = new XMLSerializer().serializeToString(clone);
+      const url = URL.createObjectURL(new Blob([xml], { type: 'image/svg+xml;charset=utf-8' }));
+      try {
+        const im = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = url; });
+        octx.drawImage(im, 0, 0, W, H);
+      } finally { URL.revokeObjectURL(url); }
+    } finally {
+      zoom = oldZ; selId = prevSel; layout();
+    }
+    return off;
+  }
+
+  function stripText() {
+    const g = groups();
+    const counts = g.filter(x => x.type === 'sleeve' || x.type === 'count').map(x => (x.label || TYPE_NAMES[x.type]) + ' ' + x.n).slice(0, 8).join(' · ');
+    const rest = g.filter(x => x.type !== 'sleeve' && x.type !== 'count').slice(0, 4).map(x => (x.label || TYPE_NAMES[x.type]) + ' ' + fmtGroup(x)).join(' · ');
+    return [proj.name, 'p' + page, paperPts().label, counts, rest].filter(Boolean).join('  |  ');
+  }
+
+  async function buildPrintPreview() {
+    if (!doc || !printRect) throw new Error('Nothing to print');
+    const { pw, ph } = paperPts();
+    const margin = 12; // pts
+    const stripH = 16;
+    const availW = pw - 2 * margin, availH = ph - 2 * margin - stripH;
+    const fit = $('#printFit').checked;
+    let drawW, drawH;
+    if (fit) {
+      const s = Math.min(availW / printRect.w, availH / printRect.h);
+      drawW = printRect.w * s; drawH = printRect.h * s;
+    } else {
+      drawW = availW; drawH = availH; // stretch
+    }
+    // Raster at ~220 DPI relative to paper
+    const dpi = 220, pxPerPt = dpi / 72;
+    const targetW = Math.round(drawW * pxPerPt);
+    const cnv = await renderRegionCanvas(printRect, targetW);
+    // If stretch, resample to fill aspect
+    let final = cnv;
+    if (!fit) {
+      const tw = Math.round(availW * pxPerPt), th = Math.round(availH * pxPerPt);
+      final = document.createElement('canvas'); final.width = tw; final.height = th;
+      final.getContext('2d').drawImage(cnv, 0, 0, tw, th);
+    }
+    const dataUrl = final.toDataURL('image/jpeg', 0.92);
+    const img = $('#printImg');
+    await new Promise((res, rej) => { img.onload = () => res(); img.onerror = rej; img.src = dataUrl; });
+    $('#printStrip').textContent = stripText();
+    // Size the print sheet in CSS px approximating paper (96dpi CSS) for print layout
+    const cssPt = 96 / 72;
+    const sheet = $('#printSheet');
+    sheet.style.width = (pw * cssPt) + 'px';
+    sheet.style.height = (ph * cssPt) + 'px';
+    $('#printPageStyle').textContent = `@page{size:${pw}pt ${ph}pt;margin:0.15in}`;
+    return { cnv: final, pw, ph, margin, stripH, fit, availW, availH, dataUrl };
+  }
+
+  async function doPrint() {
+    if (!proj) return;
+    toast('Preparing print...', 8000);
+    try {
+      await buildPrintPreview();
+      // iOS Safari: image must be loaded (already awaited); give layout a tick
+      await new Promise(r => setTimeout(r, 50));
+      const after = () => { window.removeEventListener('afterprint', after); };
+      window.addEventListener('afterprint', after);
+      window.print();
+    } catch (e) { console.error(e); toast('Print failed: ' + e.message, 5000); }
+  }
+
+  async function doSavePdf() {
+    if (!proj) return;
+    toast('Building PDF...', 8000);
+    try {
+      const { cnv, pw, ph, margin, stripH, fit, availW, availH } = await buildPrintPreview();
+      const { PDFDocument, StandardFonts } = PDFLib;
+      const out = await PDFDocument.create();
+      const pg = out.addPage([pw, ph]);
+      const font = await out.embedFont(StandardFonts.Helvetica);
+      const jpg = await (await fetch(cnv.toDataURL('image/jpeg', 0.92))).arrayBuffer();
+      const embedded = await out.embedJpg(jpg);
+      const strip = stripText();
+      pg.drawText(winAnsi(strip).slice(0, 180), { x: margin, y: ph - margin - 10, size: 8, font, color: PDFLib.rgb(0.15, 0.15, 0.15) });
+      let dw, dh;
+      if (fit) { const s = Math.min(availW / printRect.w, availH / printRect.h); dw = printRect.w * s; dh = printRect.h * s; }
+      else { dw = availW; dh = availH; }
+      const x = margin + (availW - dw) / 2, y = margin;
+      pg.drawImage(embedded, { x, y, width: dw, height: dh });
+      download(await out.save(), (proj.name || 'plan') + '-print.pdf', 'application/pdf');
+      toast('Saved print PDF');
+    } catch (e) { console.error(e); toast('PDF failed: ' + e.message, 5000); }
+  }
+
+  $('#printGo').onclick = doPrint;
+  $('#printPdfBtn').onclick = doSavePdf;
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && document.body.classList.contains('printmode') && $('#moreMenu').hidden) { e.preventDefault(); exitPrintMode(); }
+  });
+  Object.assign(window.PM, { enterPrintMode, exitPrintMode, buildPrintPreview, syncPrintBox,
+    setPrintRect: (r) => { if (!doc || !r) return; printRect = clampRect(r); syncPrintBox(); } });
+  Object.defineProperty(window.PM, 'printRect', { get: () => printRect && { ...printRect } });
+})();

@@ -101,6 +101,10 @@ for t in phone loupe undo snap cad find revit count webkit pmproj heights delete
 
 The tests launch Chrome from `/usr/bin/google-chrome`; change `executable_path` in the scripts if yours is elsewhere. The DWG checks in `test/cad.py` expect sample files from the LibreDWG test data (`example_2018.dwg`, `example_r14.dwg`) in `/tmp` as `ex_2018.dwg` and `ex_r14.dwg`.
 
+## Print
+
+On phone open **...** then **Print**. Drag the blue box (corners resize). Choose paper and orientation, then **Print** or **Save as PDF**. The plan fills the page with a thin title strip.
+
 ## Deploy
 
 The site is static. To deploy on Cloudflare Pages, upload `index.html`, `style.css`, `app.js`, `units.js`, `cad.js` and `lib/`, for example:
