@@ -103,7 +103,7 @@ The tests launch Chrome from `/usr/bin/google-chrome`; change `executable_path` 
 
 ## Print
 
-On phone open **...** then **Print**. Drag the blue box (corners resize). Choose paper and orientation, then **Print** or **Save as PDF**. The plan fills the page with a thin title strip.
+On phone open **...** then **Print**. Drag any edge or corner of the blue box to shrink the selection (free-form, not locked to paper shape). **Fit to page** zooms the view to the box. Paper defaults to Letter; **Orient** defaults to **Auto** (picks landscape/portrait from the selection). **Print** / **Save as PDF** scale the selection uniformly to fill the printable area (letterboxed if needed, never stretched), with a thin title strip. On iPhone, Print opens a full-page PDF so Safari’s print sheet isn’t tiny.
 
 ## Deploy
 

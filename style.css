@@ -266,9 +266,10 @@ body.printmode #printBar{display:block}
   pointer-events:auto;touch-action:none;
   cursor:move;-webkit-user-select:none;user-select:none;
 }
+/* Visible mid-edge + corner grips */
 #printBox .ph{
   position:absolute;width:18px;height:18px;background:#42a5f5;border:2px solid #fff;border-radius:3px;
-  box-sizing:border-box;touch-action:none;
+  box-sizing:border-box;touch-action:none;z-index:2;
 }
 #printBox .ph.nw{left:-9px;top:-9px;cursor:nwse-resize}
 #printBox .ph.ne{right:-9px;top:-9px;cursor:nesw-resize}
@@ -278,29 +279,40 @@ body.printmode #printBar{display:block}
 #printBox .ph.s{left:50%;bottom:-9px;margin-left:-9px;cursor:ns-resize}
 #printBox .ph.w{left:-9px;top:50%;margin-top:-9px;cursor:ew-resize}
 #printBox .ph.e{right:-9px;top:50%;margin-top:-9px;cursor:ew-resize}
+/* Invisible 44px hit zones along each edge (phone-friendly) */
+#printBox .edge{
+  position:absolute;z-index:1;touch-action:none;background:transparent;
+}
+#printBox .edge.n{left:18px;right:18px;top:-22px;height:44px;cursor:ns-resize}
+#printBox .edge.s{left:18px;right:18px;bottom:-22px;height:44px;cursor:ns-resize}
+#printBox .edge.w{top:18px;bottom:18px;left:-22px;width:44px;cursor:ew-resize}
+#printBox .edge.e{top:18px;bottom:18px;right:-22px;width:44px;cursor:ew-resize}
 @media (max-width:700px){
-  #printBox .ph{width:24px;height:24px}
-  #printBox .ph.nw,#printBox .ph.sw,#printBox .ph.w{left:-12px}
-  #printBox .ph.ne,#printBox .ph.se,#printBox .ph.e{right:-12px}
-  #printBox .ph.nw,#printBox .ph.ne,#printBox .ph.n{top:-12px}
-  #printBox .ph.sw,#printBox .ph.se,#printBox .ph.s{bottom:-12px}
-  #printBox .ph.n,#printBox .ph.s{margin-left:-12px}
-  #printBox .ph.w,#printBox .ph.e{margin-top:-12px}
+  #printBox .ph{width:28px;height:28px}
+  #printBox .ph.nw,#printBox .ph.sw,#printBox .ph.w{left:-14px}
+  #printBox .ph.ne,#printBox .ph.se,#printBox .ph.e{right:-14px}
+  #printBox .ph.nw,#printBox .ph.ne,#printBox .ph.n{top:-14px}
+  #printBox .ph.sw,#printBox .ph.se,#printBox .ph.s{bottom:-14px}
+  #printBox .ph.n,#printBox .ph.s{margin-left:-14px}
+  #printBox .ph.w,#printBox .ph.e{margin-top:-14px}
+  #printBox .edge.n,#printBox .edge.s{left:24px;right:24px}
+  #printBox .edge.w,#printBox .edge.e{top:24px;bottom:24px}
 }
 
 /* screen: print root stays off-screen but available for tests / print media */
 #printRoot{position:fixed;left:-10000px;top:0;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none}
-#printSheet{background:#fff;color:#111;display:flex;flex-direction:column}
-#printStrip{font:700 11px system-ui,sans-serif;padding:4px 8px;border-bottom:1px solid #bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none}
-#printImg{display:block;width:100%;height:auto;background:#fff}
+#printSheet{background:#fff;color:#111;display:flex;flex-direction:column;box-sizing:border-box}
+#printStrip{font:700 11px system-ui,sans-serif;padding:4px 8px;border-bottom:1px solid #bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none;box-sizing:border-box}
+#printImg{display:block;background:#fff;flex:none;object-fit:contain}
 
 @media print{
-  html,body{background:#fff!important;height:auto!important;overflow:visible!important}
+  @page{margin:0.25in}
+  html,body{margin:0!important;padding:0!important;background:#fff!important;width:100%!important;height:100%!important;overflow:visible!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   body *{visibility:hidden!important}
   #printRoot,#printRoot *{visibility:visible!important}
-  #printRoot{position:fixed!important;left:0!important;top:0!important;right:0!important;bottom:0!important;width:100%!important;height:100%!important;opacity:1!important;overflow:visible!important;z-index:99999!important;pointer-events:none!important}
-  #printSheet{width:100%!important;height:100%!important}
-  #printStrip{font-size:9pt!important;padding:2pt 4pt!important}
-  #printImg{max-width:100%!important;max-height:calc(100% - 18pt)!important;width:auto!important;height:auto!important;margin:0 auto!important;object-fit:contain}
-  #moreMenu,#moreBackdrop,#printBar,#printOverlay,#toast,#loupe,#selBar,#undoToast{display:none!important}
+  #printRoot{position:static!important;left:auto!important;top:auto!important;width:100%!important;height:auto!important;opacity:1!important;overflow:visible!important;z-index:99999!important;pointer-events:none!important}
+  #printSheet{width:100%!important;height:auto!important;max-width:100%!important;margin:0!important;padding:0!important}
+  #printStrip{font-size:9pt!important;padding:2pt 4pt!important;width:100%!important}
+  #printImg{display:block!important;width:100%!important;height:auto!important;max-width:100%!important;max-height:none!important;margin:0!important;object-fit:contain!important}
+  #moreMenu,#moreBackdrop,#printBar,#printOverlay,#toast,#loupe,#selBar,#undoToast,#tools,#drawBar,#side,#main,#top{display:none!important;visibility:hidden!important}
 }
