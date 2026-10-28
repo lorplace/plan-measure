@@ -438,7 +438,7 @@ $('#panelBtn').onclick = () => togglePanel(); $('#panelClose').onclick = () => t
 if (localStorage.getItem('pm-noside')) document.body.classList.add('noside');
 // ---- phone layout ----
 ICONS.more = '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>'; $('#moreBtn svg').innerHTML = ICONS.more;
-document.querySelectorAll('#moreBtn,#moreMenu [data-icon],#cancelBtn,#printGo,#printPdfBtn,#printRecenterBtn').forEach(b => { if (b.querySelector('svg')) return; const txt = b.textContent.trim(); b.textContent = '';
+document.querySelectorAll('#moreBtn,#moreMenu [data-icon],#cancelBtn,#printGo,#printRecenterBtn,#ppBack,#ppPrint,#ppSave').forEach(b => { if (b.querySelector('svg')) return; const txt = b.textContent.trim(); b.textContent = '';
   b.insertAdjacentHTML('afterbegin', `<svg class="ic" viewBox="0 0 24 24">${ICONS[b.dataset.icon] || ''}</svg><span class="t">${txt}</span>`); });
 $('#file2').addEventListener('change', onFile);
 const phoneMQ = matchMedia('(max-width: 700px)');
@@ -1284,59 +1284,239 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
     return await out.save();
   }
 
-  function openPdfBlob(bytes, name) {
+  let previewCache = null; // { dataUrl, pdfBytes, label, land, name, pw, ph }
+  let ppScale = 1, ppTX = 0, ppTY = 0;
+  let ppPinch = null;
+
+  function pdfFileName() { return (proj && proj.name ? proj.name : 'plan') + '-print.pdf'; }
+
+  function applyPpTransform() {
+    const page = $('#ppPage');
+    if (!page) return;
+    page.style.transform = `translate(${ppTX}px,${ppTY}px) scale(${ppScale})`;
+  }
+  function fitPpPage() {
+    const stage = $('#ppStage'), img = $('#ppImg'), page = $('#ppPage');
+    if (!stage || !img || !img.naturalWidth) return;
+    const pad = 24;
+    const sw = Math.max(40, stage.clientWidth - pad * 2);
+    const sh = Math.max(40, stage.clientHeight - pad * 2);
+    // Page aspect from natural image
+    const ar = img.naturalWidth / img.naturalHeight;
+    let w = sw, h = w / ar;
+    if (h > sh) { h = sh; w = h * ar; }
+    page.style.width = w + 'px';
+    ppScale = 1; ppTX = 0; ppTY = 0; applyPpTransform();
+  }
+
+  function closePreview() {
+    const modal = $('#printPreview');
+    if (modal) modal.hidden = true;
+    document.body.classList.remove('printpreview');
+    previewCache = null;
+    ppPinch = null;
+  }
+
+  async function openPreview() {
+    if (!proj || !printRect) return;
+    toast('Building preview...', 8000);
+    try {
+      const built = await buildPageCanvas();
+      const dataUrl = built.cnv.toDataURL('image/jpeg', 0.92);
+      // Pre-build PDF so Print/Save clicks can open/share synchronously (no popup block, no surprise download)
+      const { PDFDocument } = PDFLib;
+      const out = await PDFDocument.create();
+      const pg = out.addPage([built.pw, built.ph]);
+      const jpg = await (await fetch(dataUrl)).arrayBuffer();
+      const embedded = await out.embedJpg(jpg);
+      pg.drawImage(embedded, { x: 0, y: 0, width: built.pw, height: built.ph });
+      const pdfBytes = await out.save();
+
+      previewCache = {
+        dataUrl, pdfBytes, label: built.label, land: built.land,
+        name: pdfFileName(), pw: built.pw, ph: built.ph, fillRatio: built.fillRatio
+      };
+
+      // Also stage printRoot for desktop window.print
+      const img = $('#printImg');
+      await new Promise((res, rej) => { img.onload = () => res(); img.onerror = rej; img.src = dataUrl; });
+      try { if (img.decode) await img.decode(); } catch (e) { }
+      $('#printStrip').style.display = 'none';
+      const sheet = $('#printSheet');
+      sheet.style.width = (built.pw / 72) + 'in';
+      sheet.style.height = (built.ph / 72) + 'in';
+      img.style.width = (built.pw / 72) + 'in';
+      img.style.height = (built.ph / 72) + 'in';
+      const orient = built.land ? 'landscape' : 'portrait';
+      $('#printPageStyle').textContent =
+        `@page{size:letter ${orient};margin:0}` +
+        `@media print{html,body{margin:0!important}` +
+        `#printSheet{width:${built.pw / 72}in!important;height:${built.ph / 72}in!important}` +
+        `#printImg{width:${built.pw / 72}in!important;height:${built.ph / 72}in!important}}`;
+
+      const ppImg = $('#ppImg');
+      await new Promise((res, rej) => { ppImg.onload = () => res(); ppImg.onerror = rej; ppImg.src = dataUrl; });
+      try { if (ppImg.decode) await ppImg.decode(); } catch (e) { }
+      $('#ppInfo').textContent = built.label + ' · pinch to zoom';
+      $('#ppTitle').textContent = 'Print preview';
+      $('#printPreview').hidden = false;
+      document.body.classList.add('printpreview');
+      requestAnimationFrame(() => { fitPpPage(); requestAnimationFrame(fitPpPage); });
+      toast('Preview ready — Print or Save PDF when it looks right', 3500);
+    } catch (e) { console.error(e); toast('Preview failed: ' + e.message, 5000); }
+  }
+
+  async function shareOrOpenPdf(bytes, name, { preferShare } = { preferShare: true }) {
     const blob = new Blob([bytes], { type: 'application/pdf' });
+    const file = new File([blob], name, { type: 'application/pdf' });
+    if (preferShare && navigator.share && navigator.canShare) {
+      try {
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: name });
+          return 'shared';
+        }
+      } catch (e) {
+        if (e && e.name === 'AbortError') return 'aborted';
+        // fall through
+      }
+    }
+    // Open blob in a new tab (no download attribute) — sync-friendly when called from a click
     const url = URL.createObjectURL(blob);
-    // iOS: open in new tab so user can use Share / Print sheet on a real PDF page
     const w = window.open(url, '_blank');
     if (!w) {
-      // Popup blocked — fall back to download / share
-      const a = document.createElement('a');
-      a.href = url; a.download = name; a.rel = 'noopener';
-      document.body.appendChild(a); a.click(); a.remove();
-      toast('PDF ready — open it to print', 4000);
-    } else {
-      toast('PDF opened — use Share or Print from there', 4000);
+      // Last resort: download
+      download(bytes, name, 'application/pdf');
+      toast('PDF saved', 3000);
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      return 'download';
     }
-    setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    return url;
+    setTimeout(() => URL.revokeObjectURL(url), 120_000);
+    toast('PDF opened — use Share or Print', 4000);
+    return 'opened';
   }
 
-  async function doPrint() {
-    if (!proj) return;
-    toast('Preparing print...', 8000);
-    try {
-      if (isIOS) {
-        // CSS @page / window.print is unreliable on iOS Safari (tiny top-left image).
-        // Generate a real Letter PDF that fills the page and open it for the share sheet.
-        const bytes = await buildPrintPdfBytes();
-        openPdfBlob(bytes, (proj.name || 'plan') + '-print.pdf');
-        return;
+  function doPreviewPrint() {
+    if (!previewCache) return;
+    if (isIOS) {
+      // Share sheet offers Print + Save to Files without forcing a download bar
+      shareOrOpenPdf(previewCache.pdfBytes, previewCache.name, { preferShare: true });
+      return;
+    }
+    // Desktop: CSS print of the staged full-page image
+    window.print();
+  }
+
+  async function doPreviewSave() {
+    if (!previewCache) return;
+    const { pdfBytes, name } = previewCache;
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const file = new File([blob], name, { type: 'application/pdf' });
+    if (navigator.share && navigator.canShare) {
+      try {
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: name });
+          return;
+        }
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;
       }
-      await buildPrintPreview();
-      await new Promise(r => setTimeout(r, 80));
-      window.print();
-    } catch (e) { console.error(e); toast('Print failed: ' + e.message, 5000); }
+    }
+    download(pdfBytes, name, 'application/pdf');
+    toast('Saved PDF', 3000);
   }
 
-  async function doSavePdf() {
-    if (!proj) return;
-    toast('Building PDF...', 8000);
-    try {
-      const bytes = await buildPrintPdfBytes();
-      download(bytes, (proj.name || 'plan') + '-print.pdf', 'application/pdf');
-      toast('Saved print PDF');
-    } catch (e) { console.error(e); toast('PDF failed: ' + e.message, 5000); }
+  // Pinch / pan on preview stage
+  (function () {
+    const stage = $('#ppStage');
+    if (!stage) return;
+    const pts = new Map();
+    stage.addEventListener('pointerdown', e => {
+      if ($('#printPreview').hidden) return;
+      stage.setPointerCapture(e.pointerId);
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size === 2) {
+        const [a, b] = [...pts.values()];
+        ppPinch = {
+          d: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+          scale: ppScale, tx: ppTX, ty: ppTY,
+          mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2
+        };
+      } else if (pts.size === 1) {
+        ppPinch = { pan: true, x: e.clientX, y: e.clientY, tx: ppTX, ty: ppTY, scale: ppScale };
+      }
+    });
+    stage.addEventListener('pointermove', e => {
+      if (!ppPinch || !pts.has(e.pointerId)) return;
+      pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pts.size === 2 && ppPinch.d) {
+        const [a, b] = [...pts.values()];
+        const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        ppScale = Math.max(0.5, Math.min(5, ppPinch.scale * d / ppPinch.d));
+        ppTX = ppPinch.tx + (mx - ppPinch.mx);
+        ppTY = ppPinch.ty + (my - ppPinch.my);
+        applyPpTransform();
+      } else if (ppPinch.pan && pts.size === 1 && ppScale > 1.01) {
+        ppTX = ppPinch.tx + (e.clientX - ppPinch.x);
+        ppTY = ppPinch.ty + (e.clientY - ppPinch.y);
+        applyPpTransform();
+      }
+    });
+    const end = e => {
+      pts.delete(e.pointerId);
+      if (pts.size < 2) ppPinch = pts.size === 1
+        ? { pan: true, x: [...pts.values()][0].x, y: [...pts.values()][0].y, tx: ppTX, ty: ppTY, scale: ppScale }
+        : null;
+    };
+    stage.addEventListener('pointerup', end);
+    stage.addEventListener('pointercancel', end);
+    // Desktop wheel zoom
+    stage.addEventListener('wheel', e => {
+      if ($('#printPreview').hidden) return;
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.1 : 0.9;
+      ppScale = Math.max(0.5, Math.min(5, ppScale * factor));
+      applyPpTransform();
+    }, { passive: false });
+    window.addEventListener('resize', () => { if (!$('#printPreview').hidden) fitPpPage(); });
+  })();
+
+  // Public wrappers used by tests / older callers
+  async function buildPrintPdfBytes() {
+    if (previewCache && previewCache.pdfBytes) return previewCache.pdfBytes;
+    const built = await buildPageCanvas();
+    const { PDFDocument } = PDFLib;
+    const out = await PDFDocument.create();
+    const pg = out.addPage([built.pw, built.ph]);
+    const jpg = await (await fetch(built.cnv.toDataURL('image/jpeg', 0.92))).arrayBuffer();
+    const embedded = await out.embedJpg(jpg);
+    pg.drawImage(embedded, { x: 0, y: 0, width: built.pw, height: built.ph });
+    return await out.save();
   }
 
-  $('#printGo').onclick = doPrint;
-  $('#printPdfBtn').onclick = doSavePdf;
+  async function doPrint() { return openPreview(); }
+  async function doSavePdf() { return openPreview(); }
+
+  $('#printGo').onclick = openPreview;
+  $('#ppBack').onclick = () => { closePreview(); };
+  $('#ppPrint').onclick = doPreviewPrint;
+  $('#ppSave').onclick = () => { doPreviewSave(); };
+
+  const _exitPrintMode = exitPrintMode;
+  exitPrintMode = function () { closePreview(); _exitPrintMode(); };
+  $('#printCancel').onclick = exitPrintMode;
+  $('#printBtn').onclick = () => { if (document.body.classList.contains('printmode')) exitPrintMode(); else enterPrintMode(); };
+
   document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !$('#printPreview').hidden) { e.preventDefault(); closePreview(); return; }
     if (e.key === 'Escape' && document.body.classList.contains('printmode') && $('#moreMenu').hidden) { e.preventDefault(); exitPrintMode(); }
   });
   Object.assign(window.PM, {
     enterPrintMode, exitPrintMode, buildPrintPreview, buildPrintPdfBytes, syncPrintBox, fitViewToPrintRect, printableArea, orientChoice,
+    openPreview, closePreview, doPreviewPrint, doPreviewSave,
     setPrintRect: (r) => { if (!doc || !r) return; printRect = clampRect(r); syncPrintBox(); }
   });
   Object.defineProperty(window.PM, 'printRect', { get: () => printRect && { ...printRect } });
+  Object.defineProperty(window.PM, 'previewOpen', { get: () => !$('#printPreview').hidden });
+  Object.defineProperty(window.PM, 'previewCache', { get: () => previewCache && { label: previewCache.label, name: previewCache.name, land: previewCache.land, fillRatio: previewCache.fillRatio, hasPdf: !!previewCache.pdfBytes } });
 })();

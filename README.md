@@ -103,7 +103,7 @@ The tests launch Chrome from `/usr/bin/google-chrome`; change `executable_path` 
 
 ## Print
 
-On phone open **...** then **Print**. Drag any edge or corner of the blue box to shrink the selection (free-form, not locked to paper shape). **Fit to page** zooms the view to the box. Paper defaults to Letter; **Orient** defaults to **Auto** (picks landscape/portrait from the selection). **Print** / **Save as PDF** scale the selection uniformly to fill the printable area (letterboxed if needed, never stretched), with a thin title strip. On iPhone, Print opens a full-page PDF so Safari’s print sheet isn’t tiny.
+On phone open **...** then **Print**. Drag any edge or corner of the blue box to shrink the selection (free-form). **Fit to page** zooms the view. Tap **Preview** to see the letter page full-screen (pinch to zoom). From there: **Back** to adjust, **Print**, or **Save PDF**. Nothing downloads until you choose. Output scales the selection uniformly to fill the page with a thin title strip. On iPhone, Print uses the share sheet (Print / Save to Files).
 
 ## Deploy
 

@@ -305,6 +305,42 @@ body.printmode #printBar{display:block}
 #printStrip{font:700 11px system-ui,sans-serif;padding:4px 8px;border-bottom:1px solid #bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none;box-sizing:border-box}
 #printImg{display:block;background:#fff;flex:none;object-fit:contain}
 
+
+/* ---- in-app print preview modal ---- */
+#printPreview[hidden]{display:none!important}
+#printPreview{
+  position:fixed;inset:0;z-index:80;background:#12181c;
+  display:flex;flex-direction:column;
+  padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);
+}
+#printPreview .ppHead{
+  flex:none;display:flex;align-items:center;gap:10px;
+  padding:10px 12px;background:#1c262b;border-bottom:1px solid #0d1417;
+}
+#printPreview .ppMeta{flex:1;min-width:0;color:#eceff1}
+#printPreview .ppMeta strong{display:block;font-size:15px}
+#printPreview .ppMeta span{display:block;font-size:12px;color:#90a4ae;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#printPreview .ppBar{
+  flex:none;display:flex;gap:10px;padding:10px 12px;
+  background:#1c262b;border-top:1px solid #0d1417;
+}
+#printPreview .ppBar .btn{flex:1;min-height:48px;justify-content:center}
+#ppStage{
+  flex:1;min-height:0;overflow:auto;touch-action:none;
+  display:flex;align-items:center;justify-content:center;
+  padding:16px;background:#0d1417;
+  -webkit-overflow-scrolling:touch;
+}
+#ppPage{
+  background:#fff;box-shadow:0 8px 28px rgba(0,0,0,.55);
+  transform-origin:center center;will-change:transform;
+  flex:none;
+}
+#ppImg{display:block;width:100%;height:auto;pointer-events:none;-webkit-user-select:none;user-select:none}
+@media (max-width:700px){
+  #printPreview .ppHead .btn,#printPreview .ppBar .btn{min-height:48px}
+}
+
 @media print{
   @page{margin:0.25in}
   html,body{margin:0!important;padding:0!important;background:#fff!important;width:100%!important;height:100%!important;overflow:visible!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -314,5 +350,5 @@ body.printmode #printBar{display:block}
   #printSheet{width:100%!important;height:auto!important;max-width:100%!important;margin:0!important;padding:0!important}
   #printStrip{font-size:9pt!important;padding:2pt 4pt!important;width:100%!important}
   #printImg{display:block!important;width:100%!important;height:auto!important;max-width:100%!important;max-height:none!important;margin:0!important;object-fit:contain!important}
-  #moreMenu,#moreBackdrop,#printBar,#printOverlay,#toast,#loupe,#selBar,#undoToast,#tools,#drawBar,#side,#main,#top{display:none!important;visibility:hidden!important}
+  #moreMenu,#moreBackdrop,#printBar,#printOverlay,#printPreview,#toast,#loupe,#selBar,#undoToast,#tools,#drawBar,#side,#main,#top{display:none!important;visibility:hidden!important}
 }

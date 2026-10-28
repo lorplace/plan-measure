@@ -101,9 +101,21 @@
       </select>
     </label>
     <button type="button" id="printRecenterBtn" class="btn" data-icon="fit" title="Zoom so the print frame fills the screen">Fit to page</button>
-    <button type="button" id="printGo" class="btn primary" data-icon="print">Print</button>
-    <button type="button" id="printPdfBtn" class="btn" data-icon="download">Save as PDF</button>
+    <button type="button" id="printGo" class="btn primary" data-icon="print">Preview</button>
     <button type="button" id="printCancel" class="btn">Cancel</button>
+  </div>
+</div>
+<div id="printPreview" hidden>
+  <div class="ppHead">
+    <button type="button" id="ppBack" class="btn" data-icon="close">Back</button>
+    <div class="ppMeta"><strong id="ppTitle">Print preview</strong><span id="ppInfo"></span></div>
+  </div>
+  <div id="ppStage">
+    <div id="ppPage"><img id="ppImg" alt="Page preview" draggable="false"></div>
+  </div>
+  <div class="ppBar">
+    <button type="button" id="ppPrint" class="btn primary" data-icon="print">Print</button>
+    <button type="button" id="ppSave" class="btn" data-icon="download">Save PDF</button>
   </div>
 </div>
 <div id="printRoot" aria-hidden="true">
