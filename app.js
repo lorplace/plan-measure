@@ -1082,42 +1082,79 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
     let y = Math.max(0, Math.min(r.y, ph - h));
     return { x, y, w, h };
   }
-  /** Largest rect on the page (full page) — used for initial selection. */
+  /** Largest rect on the page (full page). */
   function maxPageRect() {
     const { w: pw, h: ph } = doc.sizes[page];
     return { x: 0, y: 0, w: pw, h: ph };
   }
-  /** Zoom/pan so the print frame fills the viewport. Manual only (Fit to page). */
+  /** Visible plan region in page units = viewport ∩ page (after print bar layout). */
+  function visiblePageRect() {
+    const { w: pw, h: ph } = doc.sizes[page];
+    const vr = vpEl.getBoundingClientRect();
+    const sr = stage.getBoundingClientRect();
+    let x0 = (vr.left - sr.left) / zoom;
+    let y0 = (vr.top - sr.top) / zoom;
+    let x1 = (vr.right - sr.left) / zoom;
+    let y1 = (vr.bottom - sr.top) / zoom;
+    x0 = Math.max(0, Math.min(pw, x0));
+    y0 = Math.max(0, Math.min(ph, y0));
+    x1 = Math.max(0, Math.min(pw, x1));
+    y1 = Math.max(0, Math.min(ph, y1));
+    if (x1 - x0 < 8 || y1 - y0 < 8) return { x: 0, y: 0, w: pw, h: ph };
+    return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+  }
+  /** Inset a page-unit rect by cssPx on each side (keeps grips on-screen). */
+  function insetRect(r, cssPx) {
+    const m = cssPx / Math.max(zoom, 0.01);
+    let x = r.x + m, y = r.y + m, w = r.w - 2 * m, h = r.h - 2 * m;
+    if (w < 8) { x = r.x + r.w / 2 - 4; w = 8; }
+    if (h < 8) { y = r.y + r.h / 2 - 4; h = 8; }
+    return clampRect({ x, y, w, h });
+  }
+  /** Fit whole plan page in view and select (almost) the full page. */
   function fitViewToPrintRect() {
-    if (!doc || !printRect) return;
-    const pad = 16;
-    const availW = Math.max(40, vpEl.clientWidth - pad * 2);
-    const availH = Math.max(40, vpEl.clientHeight - pad * 2);
-    const z = Math.max(0.05, Math.min(20, Math.min(availW / printRect.w, availH / printRect.h)));
-    zoom = z; layout();
-    const cx = (printRect.x + printRect.w / 2) * zoom + stage.offsetLeft;
-    const cy = (printRect.y + printRect.h / 2) * zoom + stage.offsetTop;
-    vpEl.scrollLeft = cx - vpEl.clientWidth / 2;
-    vpEl.scrollTop = cy - vpEl.clientHeight / 2;
+    if (!doc) return;
+    fitPage();
+    printRect = maxPageRect();
     syncPrintBox();
     scheduleRender(50);
   }
+  /**
+   * Init selection from the currently visible plan region.
+   * Does NOT change zoom/pan. Inset ~16css px so all 8 grips stay grabbable.
+   * If the whole page is already in view (not zoomed into a detail), use full page.
+   */
   function initPrintRect() {
-    // Start with ~70% of the page centered so edges are easy to drag inward
     const { w: pw, h: ph } = doc.sizes[page];
-    const w = pw * 0.7, h = ph * 0.7;
-    printRect = clampRect({ x: (pw - w) / 2, y: (ph - h) / 2, w, h });
+    const vis = visiblePageRect();
+    const coversPage = vis.w >= pw * 0.92 && vis.h >= ph * 0.92;
+    if (coversPage) {
+      // Whole page in view (fitPage leaves ~40px margin) — select full page; grips stay on-screen.
+      printRect = maxPageRect();
+    } else {
+      // Zoomed into a detail: match visible area, inset so all 8 grips are grabbable.
+      printRect = insetRect(vis, 16);
+    }
   }
 
   function enterPrintMode() {
     if (!doc || !proj) return toast('Open a plan first.');
     closeMoreMenu();
+    // Capture view before print bar shrinks the viewport — we remeasure after layout.
+    const prevZoom = zoom, prevSL = vpEl.scrollLeft, prevST = vpEl.scrollTop;
     document.body.classList.add('printmode');
     $('#printBar').hidden = false;
     $('#printOverlay').hidden = false;
-    initPrintRect();
-    syncPrintBox();
-    toast('Drag any blue edge or corner to shrink. Fit to page zooms the view. Print fills the paper.', 5000);
+    // Do NOT change zoom/pan. After print bar takes space, set box to visible area.
+    const settle = () => {
+      // Restore scroll if layout shifted it
+      if (Math.abs(zoom - prevZoom) > 1e-9) { zoom = prevZoom; layout(); }
+      vpEl.scrollLeft = prevSL; vpEl.scrollTop = prevST;
+      initPrintRect();
+      syncPrintBox();
+    };
+    requestAnimationFrame(() => requestAnimationFrame(settle));
+    toast('Blue box = what will print (matches your view). Drag edges to adjust.', 4500);
   }
   function exitPrintMode() {
     document.body.classList.remove('printmode');
@@ -1513,7 +1550,7 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
   });
   Object.assign(window.PM, {
     enterPrintMode, exitPrintMode, buildPrintPreview, buildPrintPdfBytes, syncPrintBox, fitViewToPrintRect, printableArea, orientChoice,
-    openPreview, closePreview, doPreviewPrint, doPreviewSave,
+    openPreview, closePreview, doPreviewPrint, doPreviewSave, visiblePageRect, initPrintRect,
     setPrintRect: (r) => { if (!doc || !r) return; printRect = clampRect(r); syncPrintBox(); }
   });
   Object.defineProperty(window.PM, 'printRect', { get: () => printRect && { ...printRect } });

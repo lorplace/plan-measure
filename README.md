@@ -103,7 +103,7 @@ The tests launch Chrome from `/usr/bin/google-chrome`; change `executable_path` 
 
 ## Print
 
-On phone open **...** then **Print**. Drag any edge or corner of the blue box to shrink the selection (free-form). **Fit to page** zooms the view. Tap **Preview** to see the letter page full-screen (pinch to zoom). From there: **Back** to adjust, **Print**, or **Save PDF**. Nothing downloads until you choose. Output scales the selection uniformly to fill the page with a thin title strip. On iPhone, Print uses the share sheet (Print / Save to Files).
+On phone open **...** then **Print**. If you were zoomed in, the blue box starts on what you see (grips on-screen); if the whole page is visible it selects the full page. Drag any edge or corner to adjust. **Fit to page** shows and selects the whole plan. Tap **Preview** to see the letter page full-screen (pinch to zoom). From there: **Back** to adjust, **Print**, or **Save PDF**. Nothing downloads until you choose. Output scales the selection uniformly to fill the page with a thin title strip. On iPhone, Print uses the share sheet (Print / Save to Files).
 
 ## Deploy
 
