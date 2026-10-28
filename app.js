@@ -242,11 +242,12 @@ function clickAt(p, e) {
 // pointer handling: click / drag / pan / pinch
 const pointers = new Map(); let gesture = null;
 vpEl.addEventListener('pointerdown', e => {
-  if (document.body.classList.contains('printmode')) return;
   if (!doc) return; try { vpEl.setPointerCapture(e.pointerId); } catch (err) { } pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 2) { const [a, b] = [...pointers.values()]; gesture = { kind: 'pinch', d: Math.hypot(a.x - b.x, a.y - b.y), z: zoom, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 }; hideLoupe(); return; }
   const p = pagePt(e);
   gesture = { kind: 'maybe', sx: e.clientX, sy: e.clientY, sl: vpEl.scrollLeft, st: vpEl.scrollTop, p, moved: false };
+  // Print mode: pan/pinch the view only (the blue frame handles its own drag/resize)
+  if (document.body.classList.contains('printmode')) { gesture.kind = 'pan'; return; }
   if (e.button === 1 || tool === 'pan') { gesture.kind = 'pan'; return; }
   if (draft && PLACE.includes(tool)) { const k = draft.pts.findIndex(q => dist(q, p) * zoom < (e.pointerType === 'touch' ? 22 : 10)); if (k >= 0 && (draft.type === 'calibrate' ? draft.pts.length === 2 : true)) { gesture.kind = 'dpt'; gesture.v = k; calSel = k; gesture.off = [draft.pts[k][0] - p[0], draft.pts[k][1] - p[1]]; showLoupe(draft.pts[k], e); draw(); return; } }
   if (e.pointerType !== 'mouse' && PLACE.includes(tool) && !(tool === 'calibrate' && draft && draft.pts.length === 2)) { gesture.kind = 'place'; hover = placeSnap(p, e); showLoupe(hover, e); draw(); return; }
@@ -437,7 +438,7 @@ $('#panelBtn').onclick = () => togglePanel(); $('#panelClose').onclick = () => t
 if (localStorage.getItem('pm-noside')) document.body.classList.add('noside');
 // ---- phone layout ----
 ICONS.more = '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>'; $('#moreBtn svg').innerHTML = ICONS.more;
-document.querySelectorAll('#moreBtn,#moreMenu [data-icon],#cancelBtn,#printGo,#printPdfBtn').forEach(b => { if (b.querySelector('svg')) return; const txt = b.textContent.trim(); b.textContent = '';
+document.querySelectorAll('#moreBtn,#moreMenu [data-icon],#cancelBtn,#printGo,#printPdfBtn,#printRecenterBtn').forEach(b => { if (b.querySelector('svg')) return; const txt = b.textContent.trim(); b.textContent = '';
   b.insertAdjacentHTML('afterbegin', `<svg class="ic" viewBox="0 0 24 24">${ICONS[b.dataset.icon] || ''}</svg><span class="t">${txt}</span>`); });
 $('#file2').addEventListener('change', onFile);
 const phoneMQ = matchMedia('(max-width: 700px)');
@@ -1031,7 +1032,7 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
   const clr = () => { const s = window.getSelection && getSelection(); if (s && s.rangeCount && !(document.activeElement && document.activeElement.matches('input,textarea'))) s.removeAllRanges(); };
   document.addEventListener('touchend', clr, { passive: true }); document.addEventListener('touchcancel', clr, { passive: true }); })();
 
-// ---- Print: adjustable area, high-res raster, window.print() + Save as PDF ----
+// ---- Print: aspect-locked page frame, auto-fit view, window.print() + Save as PDF ----
 (function () {
   const PAPERS = {
     letter: { w: 792, h: 612, name: 'Letter' }, // landscape pts (1/72"); swapped for portrait
@@ -1039,13 +1040,20 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
     a4: { w: 841.89, h: 595.28, name: 'A4' },
     a3: { w: 1190.55, h: 841.89, name: 'A3' }
   };
-  let printRect = null; // page units {x,y,w,h}
+  const PRINT_MARGIN = 12; // pts around page
+  const PRINT_STRIP = 16;  // pts for title/legend strip
+  let printRect = null; // page units {x,y,w,h} — always printable aspect
   let drag = null;
 
   function paperPts() {
     const base = PAPERS[$('#printPaper').value] || PAPERS.letter;
     const land = $('#printOrient').value !== 'portrait';
     return land ? { pw: base.w, ph: base.h, label: base.name + ' landscape' } : { pw: base.h, ph: base.w, label: base.name + ' portrait' };
+  }
+  function printableArea() {
+    const { pw, ph, label } = paperPts();
+    const availW = pw - 2 * PRINT_MARGIN, availH = ph - 2 * PRINT_MARGIN - PRINT_STRIP;
+    return { pw, ph, label, margin: PRINT_MARGIN, stripH: PRINT_STRIP, availW, availH, aspect: availW / availH };
   }
   function syncPrintBox() {
     const box = $('#printBox'); if (!box || !printRect) return;
@@ -1054,22 +1062,69 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
     box.style.width = Math.max(1, printRect.w) * zoom + 'px';
     box.style.height = Math.max(1, printRect.h) * zoom + 'px';
   }
-  function clampRect(r) {
-    const { w, h } = doc.sizes[page];
-    let x = Math.max(0, Math.min(r.x, w - 2)), y = Math.max(0, Math.min(r.y, h - 2));
-    let rw = Math.max(2, Math.min(r.w, w - x)), rh = Math.max(2, Math.min(r.h, h - y));
+  /** Largest aspect-locked rect that fits on the current page, centered on (cx,cy) if given. */
+  function maxAspectRect(aspect, cx, cy) {
+    const { w: pw, h: ph } = doc.sizes[page];
+    let rw, rh;
+    if (pw / ph > aspect) { rh = ph; rw = rh * aspect; } else { rw = pw; rh = rw / aspect; }
+    if (cx == null) cx = pw / 2; if (cy == null) cy = ph / 2;
+    let x = cx - rw / 2, y = cy - rh / 2;
+    x = Math.max(0, Math.min(x, pw - rw)); y = Math.max(0, Math.min(y, ph - rh));
     return { x, y, w: rw, h: rh };
   }
+  function clampAspectRect(r, aspect) {
+    const { w: pw, h: ph } = doc.sizes[page];
+    let w = Math.max(8, r.w), h = w / aspect;
+    if (h < 8) { h = 8; w = h * aspect; }
+    if (w > pw) { w = pw; h = w / aspect; }
+    if (h > ph) { h = ph; w = h * aspect; }
+    let x = r.x, y = r.y;
+    x = Math.max(0, Math.min(x, pw - w)); y = Math.max(0, Math.min(y, ph - h));
+    return { x, y, w, h };
+  }
+  /** Zoom/pan so the print frame fills the viewport (small margin). WYSIWYG page preview. */
+  function fitViewToPrintRect() {
+    if (!doc || !printRect) return;
+    const pad = 16; // css px margin around the frame
+    const availW = Math.max(40, vpEl.clientWidth - pad * 2);
+    const availH = Math.max(40, vpEl.clientHeight - pad * 2);
+    const z = Math.max(0.05, Math.min(20, Math.min(availW / printRect.w, availH / printRect.h)));
+    zoom = z; layout();
+    const cx = (printRect.x + printRect.w / 2) * zoom + stage.offsetLeft;
+    const cy = (printRect.y + printRect.h / 2) * zoom + stage.offsetTop;
+    vpEl.scrollLeft = cx - vpEl.clientWidth / 2;
+    vpEl.scrollTop = cy - vpEl.clientHeight / 2;
+    syncPrintBox();
+    scheduleRender(50);
+  }
+  function initPrintRect() {
+    const { aspect } = printableArea();
+    printRect = maxAspectRect(aspect);
+  }
+  function reaspectKeepingCenter() {
+    if (!printRect) return;
+    const { aspect } = printableArea();
+    const cx = printRect.x + printRect.w / 2, cy = printRect.y + printRect.h / 2;
+    // Keep area roughly similar, then clamp to page
+    const area = printRect.w * printRect.h;
+    let w = Math.sqrt(area * aspect), h = w / aspect;
+    printRect = clampAspectRect({ x: cx - w / 2, y: cy - h / 2, w, h }, aspect);
+    // If it doesn't fit well, grow to max centered on same point
+    const max = maxAspectRect(aspect, cx, cy);
+    if (printRect.w < max.w * 0.15) printRect = max;
+  }
+
   function enterPrintMode() {
     if (!doc || !proj) return toast('Open a plan first.');
     closeMoreMenu();
-    const { w, h } = doc.sizes[page];
-    printRect = { x: 0, y: 0, w, h };
     document.body.classList.add('printmode');
     $('#printBar').hidden = false;
     $('#printOverlay').hidden = false;
+    initPrintRect();
     syncPrintBox();
-    toast('Drag the blue box to choose what to print. Corners resize.', 4000);
+    // Wait a frame so printBar layout shrinks the viewport, then fill the screen with the page frame
+    requestAnimationFrame(() => { fitViewToPrintRect(); requestAnimationFrame(fitViewToPrintRect); });
+    toast('Blue frame = one printed page. Drag to move, corners to resize. Pinch to adjust view.', 4500);
   }
   function exitPrintMode() {
     document.body.classList.remove('printmode');
@@ -1079,11 +1134,13 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
   }
   $('#printBtn').onclick = () => { if (document.body.classList.contains('printmode')) exitPrintMode(); else enterPrintMode(); };
   $('#printCancel').onclick = exitPrintMode;
-  $('#printPaper').onchange = $('#printOrient').onchange = () => { };
+  $('#printRecenterBtn').onclick = () => fitViewToPrintRect();
+  $('#printPaper').onchange = $('#printOrient').onchange = () => {
+    if (!document.body.classList.contains('printmode')) return;
+    reaspectKeepingCenter(); syncPrintBox(); fitViewToPrintRect();
+  };
 
-  // Keep box aligned when zoom/layout changes
   const _layoutP = layout; layout = function () { _layoutP(); if (document.body.classList.contains('printmode')) syncPrintBox(); };
-  const _fitP = fitPage; fitPage = function () { _fitP(); if (document.body.classList.contains('printmode')) syncPrintBox(); };
 
   const box = $('#printBox');
   box.addEventListener('pointerdown', e => {
@@ -1098,27 +1155,43 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
     if (!drag) return;
     e.preventDefault();
     const p = pagePt(e), dx = p[0] - drag.ox, dy = p[1] - drag.oy, r0 = drag.r;
-    let r = { ...r0 };
-    const H = drag.h;
-    if (H === 'move') { r.x = r0.x + dx; r.y = r0.y + dy; }
-    else {
-      if (H.includes('w')) { r.x = r0.x + dx; r.w = r0.w - dx; }
-      if (H.includes('e')) { r.w = r0.w + dx; }
-      if (H.includes('n')) { r.y = r0.y + dy; r.h = r0.h - dy; }
-      if (H.includes('s')) { r.h = r0.h + dy; }
-      if (r.w < 2) { if (H.includes('w')) r.x = r0.x + r0.w - 2; r.w = 2; }
-      if (r.h < 2) { if (H.includes('n')) r.y = r0.y + r0.h - 2; r.h = 2; }
+    const aspect = printableArea().aspect;
+    let r;
+    if (drag.h === 'move') {
+      r = { x: r0.x + dx, y: r0.y + dy, w: r0.w, h: r0.h };
+      r = clampAspectRect(r, aspect);
+    } else {
+      // Corner resize, aspect-locked; opposite corner is the anchor
+      const H = drag.h;
+      const ax = H.includes('w') ? r0.x + r0.w : r0.x;
+      const ay = H.includes('n') ? r0.y + r0.h : r0.y;
+      let rw = Math.abs(p[0] - ax), rh = Math.abs(p[1] - ay);
+      // Choose the larger candidate so the corner tracks the finger
+      let w = rw, h = rw / aspect;
+      const w2 = rh * aspect, h2 = rh;
+      if (w2 * h2 > w * h) { w = w2; h = h2; }
+      w = Math.max(8, w); h = w / aspect;
+      let x = H.includes('w') ? ax - w : ax;
+      let y = H.includes('n') ? ay - h : ay;
+      r = clampAspectRect({ x, y, w, h }, aspect);
+      // Keep the anchored corner pinned when clamping shrinks the box
+      if (H.includes('e')) r.x = ax; else r.x = ax - r.w;
+      if (H.includes('s')) r.y = ay; else r.y = ay - r.h;
+      r = clampAspectRect(r, aspect);
     }
-    printRect = clampRect(r); syncPrintBox();
+    printRect = r; syncPrintBox();
   });
-  const endDrag = () => { drag = null; };
+  const endDrag = () => {
+    if (!drag) return; drag = null;
+    // After move/resize: zoom so the frame fills the screen (WYSIWYG page)
+    requestAnimationFrame(fitViewToPrintRect);
+  };
   box.addEventListener('pointerup', endDrag); box.addEventListener('pointercancel', endDrag);
 
   async function renderRegionCanvas(rect, targetW) {
     const r = Math.max(0.5, targetW / rect.w);
-    const cw = Math.max(1, Math.round(rect.w * r)), ch = Math.max(1, Math.round(rect.h * r));
     const maxPx = 16e6; let rr = r;
-    if (cw * ch > maxPx) { rr = Math.sqrt(maxPx / (rect.w * rect.h)); }
+    if (rect.w * rect.h * r * r > maxPx) rr = Math.sqrt(maxPx / (rect.w * rect.h));
     const W = Math.max(1, Math.round(rect.w * rr)), H = Math.max(1, Math.round(rect.h * rr));
     const off = document.createElement('canvas'); off.width = W; off.height = H; const octx = off.getContext('2d');
     octx.fillStyle = '#fff'; octx.fillRect(0, 0, W, H);
@@ -1130,7 +1203,6 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
     } else {
       octx.drawImage(doc.img, rect.x, rect.y, rect.w, rect.h, 0, 0, W, H);
     }
-    // Overlay markups: temporarily set zoom so stroke/font page-units rasterize to ~2.5–3 pt at print DPI
     const oldZ = zoom, prevSel = selId;
     zoom = rr / 2.5; selId = null;
     try {
@@ -1155,45 +1227,32 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
     const g = groups();
     const counts = g.filter(x => x.type === 'sleeve' || x.type === 'count').map(x => (x.label || TYPE_NAMES[x.type]) + ' ' + x.n).slice(0, 8).join(' · ');
     const rest = g.filter(x => x.type !== 'sleeve' && x.type !== 'count').slice(0, 4).map(x => (x.label || TYPE_NAMES[x.type]) + ' ' + fmtGroup(x)).join(' · ');
-    return [proj.name, 'p' + page, paperPts().label, counts, rest].filter(Boolean).join('  |  ');
+    return [proj.name, 'p' + page, printableArea().label, counts, rest].filter(Boolean).join('  |  ');
   }
 
   async function buildPrintPreview() {
     if (!doc || !printRect) throw new Error('Nothing to print');
-    const { pw, ph } = paperPts();
-    const margin = 12; // pts
-    const stripH = 16;
-    const availW = pw - 2 * margin, availH = ph - 2 * margin - stripH;
-    const fit = $('#printFit').checked;
-    let drawW, drawH;
-    if (fit) {
-      const s = Math.min(availW / printRect.w, availH / printRect.h);
-      drawW = printRect.w * s; drawH = printRect.h * s;
-    } else {
-      drawW = availW; drawH = availH; // stretch
-    }
-    // Raster at ~220 DPI relative to paper
+    const { pw, ph, margin, stripH, availW, availH, aspect } = printableArea();
+    // Selection is aspect-locked to printable area → fills the page exactly, no stretch / white bands
     const dpi = 220, pxPerPt = dpi / 72;
-    const targetW = Math.round(drawW * pxPerPt);
-    const cnv = await renderRegionCanvas(printRect, targetW);
-    // If stretch, resample to fill aspect
-    let final = cnv;
-    if (!fit) {
-      const tw = Math.round(availW * pxPerPt), th = Math.round(availH * pxPerPt);
-      final = document.createElement('canvas'); final.width = tw; final.height = th;
-      final.getContext('2d').drawImage(cnv, 0, 0, tw, th);
-    }
+    const tw = Math.round(availW * pxPerPt), th = Math.round(availH * pxPerPt);
+    const cnv = await renderRegionCanvas(printRect, tw);
+    const final = document.createElement('canvas'); final.width = tw; final.height = th;
+    final.getContext('2d').drawImage(cnv, 0, 0, tw, th); // same aspect → no distortion
     const dataUrl = final.toDataURL('image/jpeg', 0.92);
     const img = $('#printImg');
     await new Promise((res, rej) => { img.onload = () => res(); img.onerror = rej; img.src = dataUrl; });
     $('#printStrip').textContent = stripText();
-    // Size the print sheet in CSS px approximating paper (96dpi CSS) for print layout
     const cssPt = 96 / 72;
     const sheet = $('#printSheet');
     sheet.style.width = (pw * cssPt) + 'px';
     sheet.style.height = (ph * cssPt) + 'px';
+    // Image fills the printable block under the strip
+    img.style.width = (availW * cssPt) + 'px';
+    img.style.height = (availH * cssPt) + 'px';
+    img.style.objectFit = 'fill';
     $('#printPageStyle').textContent = `@page{size:${pw}pt ${ph}pt;margin:0.15in}`;
-    return { cnv: final, pw, ph, margin, stripH, fit, availW, availH, dataUrl };
+    return { cnv: final, pw, ph, margin, stripH, availW, availH, aspect, dataUrl };
   }
 
   async function doPrint() {
@@ -1201,7 +1260,6 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
     toast('Preparing print...', 8000);
     try {
       await buildPrintPreview();
-      // iOS Safari: image must be loaded (already awaited); give layout a tick
       await new Promise(r => setTimeout(r, 50));
       const after = () => { window.removeEventListener('afterprint', after); };
       window.addEventListener('afterprint', after);
@@ -1213,20 +1271,16 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
     if (!proj) return;
     toast('Building PDF...', 8000);
     try {
-      const { cnv, pw, ph, margin, stripH, fit, availW, availH } = await buildPrintPreview();
+      const { cnv, pw, ph, margin, stripH, availW, availH } = await buildPrintPreview();
       const { PDFDocument, StandardFonts } = PDFLib;
       const out = await PDFDocument.create();
       const pg = out.addPage([pw, ph]);
       const font = await out.embedFont(StandardFonts.Helvetica);
       const jpg = await (await fetch(cnv.toDataURL('image/jpeg', 0.92))).arrayBuffer();
       const embedded = await out.embedJpg(jpg);
-      const strip = stripText();
-      pg.drawText(winAnsi(strip).slice(0, 180), { x: margin, y: ph - margin - 10, size: 8, font, color: PDFLib.rgb(0.15, 0.15, 0.15) });
-      let dw, dh;
-      if (fit) { const s = Math.min(availW / printRect.w, availH / printRect.h); dw = printRect.w * s; dh = printRect.h * s; }
-      else { dw = availW; dh = availH; }
-      const x = margin + (availW - dw) / 2, y = margin;
-      pg.drawImage(embedded, { x, y, width: dw, height: dh });
+      pg.drawText(winAnsi(stripText()).slice(0, 180), { x: margin, y: ph - margin - 10, size: 8, font, color: PDFLib.rgb(0.15, 0.15, 0.15) });
+      // Fill printable area exactly (aspect matches → no distortion, no bands)
+      pg.drawImage(embedded, { x: margin, y: margin, width: availW, height: availH });
       download(await out.save(), (proj.name || 'plan') + '-print.pdf', 'application/pdf');
       toast('Saved print PDF');
     } catch (e) { console.error(e); toast('PDF failed: ' + e.message, 5000); }
@@ -1237,7 +1291,7 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && document.body.classList.contains('printmode') && $('#moreMenu').hidden) { e.preventDefault(); exitPrintMode(); }
   });
-  Object.assign(window.PM, { enterPrintMode, exitPrintMode, buildPrintPreview, syncPrintBox,
-    setPrintRect: (r) => { if (!doc || !r) return; printRect = clampRect(r); syncPrintBox(); } });
+  Object.assign(window.PM, { enterPrintMode, exitPrintMode, buildPrintPreview, syncPrintBox, fitViewToPrintRect, printableArea,
+    setPrintRect: (r) => { if (!doc || !r) return; printRect = clampAspectRect(r, printableArea().aspect); syncPrintBox(); } });
   Object.defineProperty(window.PM, 'printRect', { get: () => printRect && { ...printRect } });
 })();

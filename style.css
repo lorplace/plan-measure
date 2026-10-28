@@ -245,7 +245,7 @@ input,textarea,select,[contenteditable]{-webkit-user-select:text;user-select:tex
 #printBar{order:3;background:#1c262b;border-top:1px solid #0d1417;padding:8px;z-index:40;flex:none}
 #printBar .printBarInner{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 #printBar .prow{display:flex;align-items:center;gap:6px;color:#cfd8dc;font-size:13px}
-#printBar .prow.chk{gap:8px}
+#printBar #printRecenterBtn{white-space:nowrap}
 #printBar select{min-height:36px}
 body.printmode #tools,body.printmode #drawBar,body.printmode #side,body.printmode #selBar,body.printmode #moreBtn{pointer-events:none}
 body.printmode #printBar{display:block}
