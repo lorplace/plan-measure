@@ -45,9 +45,9 @@ async function onFile(e) { const f = e.target.files[0]; if (!f) return; e.target
   await new Promise(r => setTimeout(r, 50)); // let the message paint before heavy parsing
   try { await loadDoc(bytes, fileMime(f), f.name); } catch (err) { console.error(err); doc = null; layout();
     return toast(fileMime(f) === 'application/dwg' ? 'Could not read this DWG (' + err.message + '). Save it as DXF from your CAD program, or convert it free with ODA File Converter, then open the DXF.' : 'Could not open file: ' + err.message, 10000); }
-  proj = { id: uid(), name: f.name.replace(/\.[^.]+$/, ''), fileName: f.name, fileType: doc.mime, units: $('#units').value, scales: {}, items: [], origins: {}, hidden: {} };
+  proj = { id: uid(), name: f.name.replace(/\.[^.]+$/, ''), fileName: f.name, fileType: doc.mime, units: $('#units').value || Units.DEFAULT_UNITS, unitsMigratedMm: true, scales: {}, items: [], origins: {}, hidden: {} };
   let msg = 'Opened ' + f.name + '. Set the scale before measuring.';
-  if (doc.type === 'cad') { if (doc.cad.unitM) { proj.scales[1] = doc.cad.unitM / doc.cad.k; proj.scaleNames = { 1: 'CAD units: ' + doc.cad.unitName }; msg = 'Opened ' + f.name + ' (' + doc.cad.unitName + '). True scale set from the drawing.'; { const cu = [1, 2, 10].includes(doc.cad.units) ? 'imp' : 'mm'; proj.units = cu; $('#units').value = cu; } } else msg = 'Opened ' + f.name + '. Drawing has no units: choose them in Set scale.';  if (doc.cad.xrefs && doc.cad.xrefs.length) msg += ' Missing external references (not in this file): ' + doc.cad.xrefs.slice(0, 3).join(', ') + (doc.cad.xrefs.length > 3 ? ' and ' + (doc.cad.xrefs.length - 3) + ' more' : '') + '. Bind them in your CAD program to see them.'; }
+  if (doc.type === 'cad') { if (doc.cad.unitM) { proj.scales[1] = doc.cad.unitM / doc.cad.k; proj.scaleNames = { 1: 'CAD units: ' + doc.cad.unitName }; msg = 'Opened ' + f.name + ' (' + doc.cad.unitName + '). True scale set from the drawing.'; { const cu = [1, 2, 10].includes(doc.cad.units) ? 'imp' : 'mm'; setProjectUnits(cu); } } else msg = 'Opened ' + f.name + '. Drawing has no units: choose them in Set scale.';  if (doc.cad.xrefs && doc.cad.xrefs.length) msg += ' Missing external references (not in this file): ' + doc.cad.xrefs.slice(0, 3).join(', ') + (doc.cad.xrefs.length > 3 ? ' and ' + (doc.cad.xrefs.length - 3) + ' more' : '') + '. Bind them in your CAD program to see them.'; }
   page = 1; resetHist(); fitPage(); renderLayers(); await persist(); toast(msg, 5000);
 }
 $('#file').addEventListener('change', onFile);
@@ -314,18 +314,26 @@ $('#scaleBtn').onclick = () => { if (!doc) return toast('Open a plan first'); $(
 $('#scaleDlg').addEventListener('close', () => { if ($('#scaleDlg').returnValue !== 'ok') return; if (doc.type === 'cad') { const u = +$('#cadUnit').value; return applyScale(CAD.UNIT_M[u] / doc.cad.k, 'CAD units: ' + CAD.UNIT_NAME[u], false); }
   const s = Units.STD[$('#stdScale').value];
   let m = s.mPerPt; if (doc.type === 'image') m = s.ratio * Units.IN / (+$('#imgDpi').value || 150); applyScale(m, s.name, $('#allPages').checked); });
-function openCalibrate() { $('#calVal').value = ''; $('#calDlg').showModal(); }
+function openCalibrate() { $('#calVal').value = ''; $('#calDlg').showModal(); setTimeout(() => $('#calVal').focus(), 50); }
 $('#calDlg').addEventListener('close', () => {
   const pts = draft && draft.pts;
   if ($('#calDlg').returnValue === 'ok' && pts && pts.length === 2) {
     draft = null; hover = null;
-    const real = Units.parseLength($('#calVal').value, proj.units);
-    if (!(real > 0)) { toast('Could not read that length. Try again.'); draw(); return; }
-    applyScale(real / dist(pts[0], pts[1]), 'calibrated ' + Units.fmtLen(real, proj.units), $('#calAll').checked);
+    // Bare numbers are millimetres; explicit units (m, ft, in) still work.
+    const real = Units.parseLength($('#calVal').value, Units.DEFAULT_UNITS);
+    if (!(real > 0)) { toast('Could not read that length. Try again (e.g. 5000 for 5000 mm).'); draw(); return; }
+    // Calibrating puts the project into mm so lengths, labels and offsets show in mm.
+    setProjectUnits(Units.DEFAULT_UNITS);
+    applyScale(real / dist(pts[0], pts[1]), 'calibrated ' + Units.fmtLen(real, Units.DEFAULT_UNITS), $('#calAll').checked);
     setTool('line');
   } else draw();
 });
-$('#units').addEventListener('change', e => { if (proj) { proj.units = e.target.value; changed(); } });
+function setProjectUnits(u) {
+  if (!proj) return;
+  proj.units = u; proj.unitsMigratedMm = true;
+  $('#units').value = u; if ($('#units2')) $('#units2').value = u;
+}
+$('#units').addEventListener('change', e => { if (proj) { setProjectUnits(e.target.value); changed(); } });
 
 // ---------- CSV export ----------
 function csvCell(v) { v = String(v ?? ''); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; }
@@ -400,7 +408,14 @@ let saveTimer; function persistSoon() { clearTimeout(saveTimer); saveTimer = set
 function packForSave(M) { const o = {}; for (const k in M) if (k[0] !== '_' && typeof M[k] !== 'function') o[k] = M[k]; return o; }
 async function persist() { if (!proj || !doc) return; try { await idb('readwrite', s => s.put({ ...JSON.parse(JSON.stringify(proj)), ...(doc.type === 'cad' ? { bytes: null, cadPack: packForSave(doc.cad) } : { bytes: doc.bytes }), updated: Date.now() })); localStorage.setItem('pm-last', proj.id); } catch (e) { toast('Could not save: ' + e.message); } }
 $('#saveBtn').onclick = async () => { if (!proj) return; const n = prompt('Project name:', proj.name); if (n) { proj.name = n; await persist(); toast('Saved in this browser'); } };
-async function openProject(id) { const r = await idb('readonly', s => s.get(id)); if (!r) return; const { bytes, cadPack, updated, ...p } = r; await loadDoc(cadPack ? { cadPack } : new Uint8Array(bytes), p.fileType, p.fileName); proj = p; resetHist(); $('#units').value = p.units; page = 1; selId = null; draft = null; fitPage(); localStorage.setItem('pm-last', id); }
+// One-shot: older projects defaulted to feet/metres; move them to mm unless already migrated.
+// After this, Units picker choices stick via unitsMigratedMm.
+function migrateProjectUnits(p) {
+  if (!p) return;
+  if (p.units !== 'mm' && p.units !== 'met' && p.units !== 'imp') p.units = Units.DEFAULT_UNITS;
+  if (!p.unitsMigratedMm) { p.units = Units.DEFAULT_UNITS; p.unitsMigratedMm = true; }
+}
+async function openProject(id) { const r = await idb('readonly', s => s.get(id)); if (!r) return; const { bytes, cadPack, updated, ...p } = r; await loadDoc(cadPack ? { cadPack } : new Uint8Array(bytes), p.fileType, p.fileName); proj = p; migrateProjectUnits(proj); resetHist(); $('#units').value = proj.units; if ($('#units2')) $('#units2').value = proj.units; page = 1; selId = null; draft = null; fitPage(); localStorage.setItem('pm-last', id); }
 $('#projBtn').onclick = async () => { const all = await idb('readonly', s => s.getAll()); all.sort((a, b) => b.updated - a.updated);
   $('#projList').innerHTML = all.map(p => `<div class="proj"><span>${esc(p.name)}<br><small>${new Date(p.updated).toLocaleString()} - ${p.items.length} items</small></span><button type="button" class="btn" data-open="${p.id}">Open</button><button type="button" class="btn danger" data-del="${p.id}">Delete</button></div>`).join('') || 'No saved projects.';
   $('#projDlg').showModal(); };
@@ -926,7 +941,7 @@ async function readPmproj(blob) {
 async function openPmproj(f) {
   toast('Opening project file...', 30000); await new Promise(r => setTimeout(r, 30));
   try { const { head, cad, bytes } = await readPmproj(f); await loadDoc(cad ? { cadPack: cad } : new Uint8Array(bytes), head.mime, head.name);
-    proj = Object.assign({ origins: {}, hidden: {}, slab: {} }, head.proj); resetHist(); $('#units').value = proj.units; page = 1; selId = null; draft = null; fitPage(); renderLayers(); persistSoon(); toast('Opened ' + f.name); }
+    proj = Object.assign({ origins: {}, hidden: {}, slab: {} }, head.proj); migrateProjectUnits(proj); resetHist(); $('#units').value = proj.units; if ($('#units2')) $('#units2').value = proj.units; page = 1; selId = null; draft = null; fitPage(); renderLayers(); persistSoon(); toast('Opened ' + f.name); }
   catch (err) { console.error(err); toast('Could not open the project file: ' + err.message, 8000); } }
 $('#pmprojBtn').onclick = async () => { if (!proj || !doc) return toast('Open a plan first.'); toast('Building project file...', 20000); const b = await buildPmproj(); download(b, (proj.name || 'project') + '.pmproj', 'application/octet-stream'); toast('Saved ' + (b.size / 1e6).toFixed(1) + ' MB project file'); };
 Object.assign(window.PM, { buildPmproj });

@@ -352,3 +352,8 @@ body.printmode #printBar{display:block}
   #printImg{display:block!important;width:100%!important;height:auto!important;max-width:100%!important;max-height:none!important;margin:0!important;object-fit:contain!important}
   #moreMenu,#moreBackdrop,#printBar,#printOverlay,#printPreview,#toast,#loupe,#selBar,#undoToast,#tools,#drawBar,#side,#main,#top{display:none!important;visibility:hidden!important}
 }
+
+/* Calibration length: mm labelled beside the field */
+.cal-input{display:flex;align-items:center;gap:8px;margin:10px 0}
+.cal-input input{flex:1;margin:0}
+.cal-unit{flex:none;font-weight:700;font-size:16px;color:#1565c0;background:#e3f2fd;border:1px solid #90caf9;border-radius:8px;padding:8px 12px;letter-spacing:.02em}

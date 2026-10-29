@@ -29,7 +29,7 @@ Everything runs on your device. Files are opened locally in the browser and proj
 - CAD layer list with on/off toggles; true scale read from the drawing units (`$INSUNITS`), with a manual override for unitless drawings
 
 **Scale**
-- Per-page calibration: click two points and type a known distance (`12'6"`, `12' 6 1/2"`, `20ft`, `3.5m`, `3500mm`)
+- Per-page calibration: click two points and type a known distance in millimetres (bare number = mm, e.g. `5000` or `5000mm`; also `5m`, `12'6"`). Calibrating switches the project to millimetres so lengths, labels and grid offsets show in mm
 - Standard architectural, engineering and metric scales (1/4" = 1'-0", 1" = 20', 1:100, and more)
 - Feet-inches or metric display
 

@@ -174,8 +174,11 @@
 </form></dialog>
 <dialog id="calDlg"><form method="dialog">
   <h3>Known distance</h3>
-  <p>Enter the real length between the two points. Examples: 12'6", 12' 6 1/2", 20ft, 3.5m, 3500mm</p>
-  <input id="calVal" type="text" autocomplete="off" placeholder="e.g. 3500 (mm), 3.5m or 12'6&quot;">
+  <p>Enter the real length between the two points in <strong>millimetres (mm)</strong>. A bare number is mm. You can also type units, e.g. <code>5000</code>, <code>5000mm</code>, <code>5m</code>, or <code>12'6"</code>.</p>
+  <div class="cal-input">
+    <input id="calVal" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 5000" aria-label="Known length in millimetres">
+    <span class="cal-unit" aria-hidden="true">mm</span>
+  </div>
   <label><input type="checkbox" id="calAll"> Apply to all pages</label>
   <menu><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary">Apply</button></menu>
 </form></dialog>
