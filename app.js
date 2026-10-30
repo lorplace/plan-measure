@@ -277,7 +277,7 @@ function drawSleeveTargets(g) {
   if (!doc || !(PLACE.includes(tool) || tool === 'count' || tool === 'sleeve' || tool === 'origin')) return;
   const G = geomCache[page]; if (!G || !G.sleeve || !G.sleeve.n) return;
   // Hide dots when the whole sheet fits too small — symbols would be noise
-  if (zoom < 0.35) return;
+  if (zoom < 0.22) return;
   const vis = (typeof visRect === 'function' ? visRect() : null) || { x0: 0, y0: 0, w: doc.sizes[page].w, h: doc.sizes[page].h };
   const pad = 48 / zoom, x0 = vis.x0 - pad, y0 = vis.y0 - pad, x1 = vis.x0 + vis.w + pad, y1 = vis.y0 + vis.h + pad;
   const { xy, grid } = G.sleeve, r = 5.5 / zoom, sw = 1.6 / zoom;
@@ -988,11 +988,35 @@ function isOrangePdfColor(c) {
 }
 function sleeveGridAdd(grid, i, x, y) { const k = Math.floor(x / CELL) + ',' + Math.floor(y / CELL); let c = grid.get(k); if (!c) grid.set(k, c = []); c.push(i); }
 function buildSleeveIndex(G, pts) {
-  const tol = 1e-4 * Math.max(doc.sizes[page].w, doc.sizes[page].h);
+  const pg = (G && G.sleeve && G.sleeve.page) || page;
+  const tol = 1e-4 * Math.max(doc.sizes[pg].w, doc.sizes[pg].h);
+  const srcKinds = (pts && pts._kinds) || null;
   const uniq = dedupePts(pts, Math.max(tol, 0.5));
+  let kinds = null;
+  if (srcKinds && srcKinds.length === pts.length) {
+    // Map each uniq point to the kind of the first matching source (dedupe keeps first)
+    const cell = Math.max(tol, 0.5), g = new Map();
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i], k = Math.floor(p[0] / cell) + ',' + Math.floor(p[1] / cell);
+      let a = g.get(k); if (!a) g.set(k, a = []); a.push(i);
+    }
+    kinds = [];
+    for (const u of uniq) {
+      let best = 'anchor', bd = 1e9;
+      const ix = Math.floor(u[0] / cell), iy = Math.floor(u[1] / cell);
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+        const a = g.get((ix + dx) + ',' + (iy + dy)); if (!a) continue;
+        for (const i of a) {
+          const d = Math.hypot(pts[i][0] - u[0], pts[i][1] - u[1]);
+          if (d < bd) { bd = d; best = srcKinds[i] || 'anchor'; }
+        }
+      }
+      kinds.push(best);
+    }
+  } else if (uniq._kinds) kinds = uniq._kinds;
   const n = uniq.length, xy = new Float64Array(n * 2), grid = new Map();
   for (let i = 0; i < n; i++) { xy[2 * i] = uniq[i][0]; xy[2 * i + 1] = uniq[i][1]; sleeveGridAdd(grid, i, uniq[i][0], uniq[i][1]); }
-  G.sleeve = { gen: contentGen, page, n, xy, grid }; return G.sleeve;
+  G.sleeve = { gen: contentGen, page: pg, n, xy, grid, kinds }; return G.sleeve;
 }
 function collectCadSleevePts() {
   const M = doc.cad, hid = (proj && proj.hidden) || {}, sfx = commonSuffix(M), out = [];
@@ -1077,40 +1101,72 @@ function scanOrangeFromPix(G) {
   return clusterOrange(data, W, Hh, 1, 4, 2500);
 }
 async function scanOrangeFromPdfOps(pg, opsIn) {
-  // Resolution-independent: orange fill/stroke path centres from the pdf.js operator list
+  // Colour-independent sleeve/anchor centres from the pdf.js operator list:
+  //  - crosshair intersections (short H∩V arms — purple circles, black targets, any colour)
+  //  - compact bezier circles / small squares (Hilti) / compact closed diamonds
+  //  - repeated Form XObject insert origins (block instances, any colour)
+  //  - orange/amber filled markers (CAD firestop diamonds)
+  // Runs in idle chunks; never forces a second getOperatorList on phone.
   let page, ops = opsIn;
   try {
     page = await doc.pdf.getPage(pg);
     if (!ops) ops = cachedOps(page);
-    // Phone: never force a fresh getOperatorList for anchors (can be multi‑million ops / Safari OOM)
     if (!ops && !isPhoneDev) ops = await page.getOperatorList();
   } catch (e) { return []; }
   if (!ops || !ops.fnArray || !ops.fnArray.length) return [];
-  // Huge CAD sheets on phone: skip vector walk (render cache alone can be 4M+ ops)
-  if (isPhoneDev && ops.fnArray.length > 350000) return [];
   const vp = doc.vps[pg], OPS = pdfjsLib.OPS, U = pdfjsLib.Util;
   let fill = null, stroke = null, ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm);
   const stack = [];
   const setCtm = m => { ctm = m; M = U.transform(vp.transform, m); };
   const xform = (x, y) => { const [a, b, c, d, e, f] = M; return [a * x + c * y + e, b * x + d * y + f]; };
-  let pathPts = [];
-  const raw = [];
-  const flush = (col) => {
-    if (pathPts.length < 1) { pathPts = []; return; }
+  let pathPts = [], pathCurves = 0, pathLines = 0, pathRects = 0, pathPrev = null, pathClosed = false;
+  const raw = []; // coloured compact path centres [x,y,'orange']
+  const shortH = [], shortV = []; // [mx,my,L] for crosshair detect
+  const geomPts = []; // [x,y,kind]
+  const formOrigins = []; // [x,y,sc] Form XObject inserts
+  const flushColored = () => {
+    if (pathPts.length < 1) { pathPts = []; pathCurves = pathLines = pathRects = 0; pathPrev = null; pathClosed = false; return; }
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, sx = 0, sy = 0;
     for (let i = 0; i < pathPts.length; i++) {
       const x = pathPts[i][0], y = pathPts[i][1];
       if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y;
       sx += x; sy += y;
     }
-    const n = pathPts.length, bw = x1 - x0, bh = y1 - y0;
-    pathPts = [];
-    const span = bw > bh ? bw : bh;
-    if (span < 0.25 || span > 48) return; // drop degenerate / title-block rules
+    const n = pathPts.length, bw = x1 - x0, bh = y1 - y0, span = bw > bh ? bw : bh;
+    pathPts = []; pathCurves = pathLines = pathRects = 0; pathPrev = null; pathClosed = false;
+    if (span < 0.25 || span > 48) return;
     if ((bw > 28 && bh < 0.8) || (bh > 28 && bw < 0.8)) return;
-    raw.push([sx / n, sy / n]);
+    raw.push([sx / n, sy / n, 'orange']);
   };
-  const CHUNK = isPhoneDev ? 6000 : 50000;
+  const flushGeom = () => {
+    if (pathPts.length < 1) { pathPts = []; pathCurves = pathLines = pathRects = 0; pathPrev = null; pathClosed = false; return; }
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    for (let i = 0; i < pathPts.length; i++) {
+      const x = pathPts[i][0], y = pathPts[i][1];
+      if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y;
+    }
+    const bw = x1 - x0, bh = y1 - y0, span = bw > bh ? bw : bh;
+    const aspect = Math.max(bw, bh) / Math.max(Math.min(bw, bh), 1e-6);
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    // Bezier circle / oval (any colour)
+    if (pathCurves >= 3 && pathCurves <= 8 && pathLines <= 2 && span >= 2 && span <= 55 && aspect <= 1.55)
+      geomPts.push([cx, cy, 'circle']);
+    // Small square / Hilti (rectangle op or closed quad)
+    if (pathRects >= 1 && span >= 2 && span <= 40 && aspect <= 1.35)
+      geomPts.push([cx, cy, 'square']);
+    // Compact closed polygon (diamond / bow-tie / small marker body) — any colour
+    else if (pathClosed && pathLines >= 3 && pathLines <= 8 && pathCurves === 0 && pathRects === 0 && span >= 2 && span <= 36 && aspect <= 1.7)
+      geomPts.push([cx, cy, 'symbol']);
+    pathPts = []; pathCurves = pathLines = pathRects = 0; pathPrev = null; pathClosed = false;
+  };
+  const noteSeg = (a, b) => {
+    const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+    if (L < 3.5 || L > 32) return;
+    const ax = Math.abs(dx), ay = Math.abs(dy);
+    if (ay < 0.28 * L && ax > 0.75 * L) shortH.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, L]);
+    else if (ax < 0.28 * L && ay > 0.75 * L) shortV.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, L]);
+  };
+  const CHUNK = isPhoneDev ? 4000 : 40000;
   for (let i = 0; i < ops.fnArray.length; i++) {
     if (i && (i % CHUNK) === 0) {
       if (openBusy || !doc) return [];
@@ -1120,33 +1176,114 @@ async function scanOrangeFromPdfOps(pg, opsIn) {
     if (fn === OPS.save) stack.push({ ctm, fill, stroke });
     else if (fn === OPS.restore) { const s = stack.pop(); if (s) { setCtm(s.ctm); fill = s.fill; stroke = s.stroke; } }
     else if (fn === OPS.transform) setCtm(U.transform(ctm, args));
-    else if (fn === OPS.paintFormXObjectBegin) { stack.push({ ctm, fill, stroke }); if (args && args[0]) setCtm(U.transform(ctm, args[0])); }
+    else if (fn === OPS.paintFormXObjectBegin) {
+      stack.push({ ctm, fill, stroke });
+      if (args && args[0]) setCtm(U.transform(ctm, args[0]));
+      // Insert origin of a Form XObject = block-instance centre (colour-independent)
+      const sc = Math.hypot(M[0], M[1]) + Math.hypot(M[2], M[3]);
+      if (sc > 0.08 && sc < 90) formOrigins.push([M[4], M[5], sc]);
+    }
     else if (fn === OPS.paintFormXObjectEnd) { const s = stack.pop(); if (s) { setCtm(s.ctm); fill = s.fill; stroke = s.stroke; } }
     else if (fn === OPS.setFillRGBColor) fill = args;
     else if (fn === OPS.setStrokeRGBColor) stroke = args;
     else if (fn === OPS.constructPath) {
+      pathPts = []; pathCurves = pathLines = pathRects = 0; pathPrev = null; pathClosed = false;
       const sub = args[0], co = args[1]; let j = 0;
       for (const op of sub) {
-        if (op === OPS.moveTo) { pathPts.push(xform(co[j], co[j + 1])); j += 2; }
-        else if (op === OPS.lineTo) { pathPts.push(xform(co[j], co[j + 1])); j += 2; }
-        else if (op === OPS.curveTo) { pathPts.push(xform(co[j + 4], co[j + 5])); j += 6; }
-        else if (op === OPS.curveTo2 || op === OPS.curveTo3) { pathPts.push(xform(co[j + 2], co[j + 3])); j += 4; }
+        if (op === OPS.moveTo) { pathPrev = xform(co[j], co[j + 1]); pathPts.push(pathPrev); j += 2; }
+        else if (op === OPS.lineTo) {
+          const q = xform(co[j], co[j + 1]); j += 2; pathPts.push(q); pathLines++;
+          if (pathPrev) noteSeg(pathPrev, q); pathPrev = q;
+        }
+        else if (op === OPS.curveTo) { pathPrev = xform(co[j + 4], co[j + 5]); pathPts.push(pathPrev); j += 6; pathCurves++; }
+        else if (op === OPS.curveTo2 || op === OPS.curveTo3) { pathPrev = xform(co[j + 2], co[j + 3]); pathPts.push(pathPrev); j += 4; pathCurves++; }
         else if (op === OPS.rectangle) {
           const x = co[j], y = co[j + 1], w = co[j + 2], h = co[j + 3]; j += 4;
-          pathPts.push(xform(x, y), xform(x + w, y), xform(x + w, y + h), xform(x, y + h));
+          const p0 = xform(x, y), p1 = xform(x + w, y), p2 = xform(x + w, y + h), p3 = xform(x, y + h);
+          pathPts.push(p0, p1, p2, p3); pathRects++; pathPrev = p0; pathClosed = true;
+          noteSeg(p0, p1); noteSeg(p1, p2); noteSeg(p2, p3); noteSeg(p3, p0);
         }
+        else if (op === OPS.closePath) { pathClosed = true; }
       }
     } else if (fn === OPS.fill || fn === OPS.eoFill) {
-      if (isOrangePdfColor(fill)) flush(fill); else pathPts = [];
+      const keep = pathPts.slice(); const pc = pathCurves, pl = pathLines, pr = pathRects, pcl = pathClosed;
+      flushGeom();
+      pathPts = keep; pathCurves = pc; pathLines = pl; pathRects = pr; pathClosed = pcl;
+      if (isOrangePdfColor(fill)) flushColored(); else { pathPts = []; pathCurves = pathLines = pathRects = 0; pathPrev = null; pathClosed = false; }
     } else if (fn === OPS.stroke || fn === OPS.closeStroke) {
-      if (isOrangePdfColor(stroke)) flush(stroke); else pathPts = [];
+      if (fn === OPS.closeStroke) pathClosed = true;
+      const keep = pathPts.slice(); const pc = pathCurves, pl = pathLines, pr = pathRects, pcl = pathClosed;
+      flushGeom();
+      pathPts = keep; pathCurves = pc; pathLines = pl; pathRects = pr; pathClosed = pcl;
+      if (isOrangePdfColor(stroke)) flushColored(); else { pathPts = []; pathCurves = pathLines = pathRects = 0; pathPrev = null; pathClosed = false; }
     } else if (fn === OPS.fillStroke || fn === OPS.eoFillStroke || fn === OPS.closeFillStroke || fn === OPS.closeEOFillStroke) {
-      if (isOrangePdfColor(fill) || isOrangePdfColor(stroke)) flush(isOrangePdfColor(fill) ? fill : stroke); else pathPts = [];
-    } else if (fn === OPS.endPath) pathPts = [];
+      if (fn === OPS.closeFillStroke || fn === OPS.closeEOFillStroke) pathClosed = true;
+      const keep = pathPts.slice(); const pc = pathCurves, pl = pathLines, pr = pathRects, pcl = pathClosed;
+      flushGeom();
+      pathPts = keep; pathCurves = pc; pathLines = pl; pathRects = pr; pathClosed = pcl;
+      if (isOrangePdfColor(fill) || isOrangePdfColor(stroke)) flushColored();
+      else { pathPts = []; pathCurves = pathLines = pathRects = 0; pathPrev = null; pathClosed = false; }
+    } else if (fn === OPS.endPath) { pathPts = []; pathCurves = pathLines = pathRects = 0; pathPrev = null; pathClosed = false; }
   }
-  // Light dedupe only (keep ~all path centres so a full sheet yields 1000+)
+  // Crosshair centres: short H∩V with similar arm lengths (colour-independent)
+  const cell = 5, vgrid = new Map();
+  for (const v of shortV) {
+    const k = Math.floor(v[0] / cell) + ',' + Math.floor(v[1] / cell);
+    let a = vgrid.get(k); if (!a) vgrid.set(k, a = []); a.push(v);
+  }
+  const cross = [];
+  for (const h of shortH) {
+    const ix = Math.floor(h[0] / cell), iy = Math.floor(h[1] / cell);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      const a = vgrid.get((ix + dx) + ',' + (iy + dy)); if (!a) continue;
+      for (const v of a) {
+        const tol = 0.4 * Math.min(h[2], v[2]);
+        if (Math.abs(h[0] - v[0]) > tol || Math.abs(h[1] - v[1]) > tol) continue;
+        const ratio = h[2] > v[2] ? h[2] / v[2] : v[2] / h[2];
+        if (ratio > 2.4) continue;
+        cross.push([v[0], h[1], 'crosshair']);
+      }
+    }
+  }
+  // Repeated Form XObject inserts: keep when ≥5 similar-scale paints (block instances)
+  const formPts = [];
+  if (formOrigins.length >= 5) {
+    const bySc = new Map();
+    for (const f of formOrigins) {
+      const sk = Math.round(f[2] * 4) / 4;
+      let a = bySc.get(sk); if (!a) bySc.set(sk, a = []); a.push(f);
+    }
+    for (const arr of bySc.values()) {
+      if (arr.length < 5) continue;
+      for (const f of arr) formPts.push([f[0], f[1], 'form']);
+    }
+  }
   const { w, h } = doc.sizes[pg];
-  return dedupePts(raw, Math.max(1.2, 5e-4 * Math.max(w, h)));
+  const tol = Math.max(1.2, 5e-4 * Math.max(w, h));
+  // Prefer crosshair > circle/square/symbol > form > orange when deduping (first wins)
+  const tagged = cross.concat(geomPts, formPts, raw);
+  const uniq = dedupePts(tagged.map(p => [p[0], p[1]]), tol);
+  // Recover kinds by nearest tagged source
+  const kinds = [];
+  const tcell = Math.max(tol, 1), tgrid = new Map();
+  for (const p of tagged) {
+    const k = Math.floor(p[0] / tcell) + ',' + Math.floor(p[1] / tcell);
+    let a = tgrid.get(k); if (!a) tgrid.set(k, a = []); a.push(p);
+  }
+  for (const u of uniq) {
+    let best = 'anchor', bd = 1e9;
+    const ix = Math.floor(u[0] / tcell), iy = Math.floor(u[1] / tcell);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      const a = tgrid.get((ix + dx) + ',' + (iy + dy)); if (!a) continue;
+      for (const p of a) {
+        const d = Math.hypot(p[0] - u[0], p[1] - u[1]);
+        if (d < bd) { bd = d; best = p[2] || 'anchor'; }
+      }
+    }
+    kinds.push(best);
+  }
+  uniq._kinds = kinds;
+  return uniq;
 }
 async function scanOrangeFromPdfRasterTiled(pg) {
   // Fallback for image-only plans: tile at high res, cluster per tile, release canvases
@@ -1176,28 +1313,56 @@ async function scanOrangeFromPdfRasterTiled(pg) {
   return dedupePts(pts, Math.max(2, 8e-4 * Math.max(w, h)));
 }
 async function scanOrangeFromPdf(pg) {
-  // Opening must stay free: prefer the already-drawn base bitmap on phone; vector only when cheap
+  // Opening stays free (caller runs after openBusy). Prefer cached operator-list geometry
+  // (colour-independent); merge with base orange raster; never skip the vector walk when
+  // ops are already cached — chunked yields keep the UI alive on phone.
   try {
+    let basePts = [];
     if (base._ok && base._key === viewKey() && base._r > 0.2) {
       try {
         const ctx = base.getContext('2d', { willReadFrequently: true });
         const { width: W, height: Hh } = base; const data = ctx.getImageData(0, 0, W, Hh).data;
-        const fromBase = clusterOrange(data, W, Hh, 1 / base._r, 3, 2500);
-        // On phone, accept base hits and skip multi-million op walks
-        if (isPhoneDev && fromBase.length >= 5) return fromBase;
-        if (!isPhoneDev && fromBase.length >= 40) return fromBase;
-        var basePts = fromBase;
-      } catch (e) { var basePts = []; }
-    } else var basePts = [];
+        basePts = clusterOrange(data, W, Hh, 1 / base._r, 3, 2500);
+      } catch (e) { basePts = []; }
+    }
+    if (openBusy) return basePts;
     let page; try { page = await doc.pdf.getPage(pg); } catch (e) { return basePts; }
     const cached = cachedOps(page);
-    const vec = (cached && !(isPhoneDev && cached.fnArray.length > 350000))
-      ? await scanOrangeFromPdfOps(pg, cached) : [];
-    if (vec.length >= 20) return vec;
-    if (basePts.length >= 5) return basePts;
+    let vec = [];
+    if (cached) vec = await scanOrangeFromPdfOps(pg, cached);
+    else if (!isPhoneDev) vec = await scanOrangeFromPdfOps(pg, null);
+    if (vec.length >= 10) {
+      if (basePts.length) {
+        const merged = vec.concat(basePts);
+        const mk = (vec._kinds || vec.map(() => 'anchor')).concat(basePts.map(() => 'raster'));
+        const out = dedupePts(merged, Math.max(1.2, 5e-4 * Math.max(doc.sizes[pg].w, doc.sizes[pg].h)));
+        // approximate kinds: prefer vector
+        out._kinds = out.map(() => 'anchor');
+        if (vec._kinds) {
+          const cell = 2, g = new Map();
+          for (let i = 0; i < vec.length; i++) {
+            const p = vec[i], k = Math.floor(p[0] / cell) + ',' + Math.floor(p[1] / cell);
+            let a = g.get(k); if (!a) g.set(k, a = []); a.push(i);
+          }
+          out._kinds = out.map(u => {
+            const ix = Math.floor(u[0] / cell), iy = Math.floor(u[1] / cell);
+            for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+              const a = g.get((ix + dx) + ',' + (iy + dy)); if (!a) continue;
+              for (const i of a) if (Math.hypot(vec[i][0] - u[0], vec[i][1] - u[1]) < 2) return vec._kinds[i];
+            }
+            return 'raster';
+          });
+        }
+        return out;
+      }
+      return vec;
+    }
+    if (basePts.length >= 5) { basePts._kinds = basePts.map(() => 'raster'); return basePts; }
     if (openBusy) return basePts;
     const tiled = await scanOrangeFromPdfRasterTiled(pg);
-    return tiled.length >= basePts.length ? tiled : basePts;
+    const best = tiled.length >= basePts.length ? tiled : basePts;
+    best._kinds = best.map(() => 'raster');
+    return best;
   } catch (e) { console.warn('scanOrangeFromPdf', e); return []; }
 }
 async function ensureSleeveSnap(pg) {
@@ -1206,11 +1371,17 @@ async function ensureSleeveSnap(pg) {
     const G = await buildGeom(pg); if (!G || !G.ready || openBusy) return G || { ready: false };
     if (G.sleeve && G.sleeve.gen === contentGen && G.sleeve.page === pg && G.sleeve.n >= 0) return G;
     const pts = [];
-    if (proj) for (const it of proj.items) if (it.type === 'sleeve' && it.page === pg && it.pts && it.pts[0]) pts.push(it.pts[0]);
-    if (doc.type === 'cad') pts.push(...collectCadSleevePts());
-    else if (doc.type === 'image') pts.push(...scanOrangeFromPix(G));
-    else if (doc.type === 'pdf') pts.push(...(await scanOrangeFromPdf(pg)));
+    const kinds = [];
+    if (proj) for (const it of proj.items) if (it.type === 'sleeve' && it.page === pg && it.pts && it.pts[0]) { pts.push(it.pts[0]); kinds.push('markup'); }
+    if (doc.type === 'cad') { const c = collectCadSleevePts(); for (const p of c) { pts.push(p); kinds.push('cad'); } }
+    else if (doc.type === 'image') { const c = scanOrangeFromPix(G); for (const p of c) { pts.push(p); kinds.push('raster'); } }
+    else if (doc.type === 'pdf') {
+      const c = await scanOrangeFromPdf(pg);
+      const ck = c._kinds || null;
+      for (let i = 0; i < c.length; i++) { pts.push(c[i]); kinds.push(ck ? ck[i] : 'anchor'); }
+    }
     if (openBusy) return G;
+    pts._kinds = kinds;
     buildSleeveIndex(G, pts); return G;
   } catch (e) { console.warn('ensureSleeveSnap', e); return geomCache[pg] || { ready: false }; }
 }
@@ -1293,15 +1464,19 @@ let wallExt = null; // { a:[x,y], b:[x,y] } fictional wall continuation while ai
 function findSnap(p, r, exclude, opts) {
   const G = geomCache[page]; let best = null; const consider = (q, kind, pri) => { const d = dist(p, q); if (d <= r && (!best || pri < best.pri || (pri === best.pri && d < best.d))) best = { p: q, kind, pri, d }; };
   opts = opts || {};
-  // 1) Sleeve centres / orange anchors — highest priority; local cluster → diamond centre
+  // 1) Sleeve / anchor centres — STRICT priority: if any are in range, they win over
+  // every line endpoint / arrowhead / markup, even when those are closer to the aim point.
   if (G && G.sleeve) {
     const near = nearSleevePts(G, p, r);
     if (near.length) {
+      // Closest sleeve/anchor centre wins. Only average sub-pixel duplicates of the
+      // SAME symbol (tol ~2.5 CSS units) — never blend neighbouring distinct anchors.
       let bq = near[0], bd = dist(p, near[0]);
       for (let i = 1; i < near.length; i++) { const d = dist(p, near[i]); if (d < bd) { bd = d; bq = near[i]; } }
-      const cr = Math.max(6, r * 0.45); let sx = 0, sy = 0, n = 0;
-      for (const q of near) if (Math.hypot(q[0] - bq[0], q[1] - bq[1]) <= cr) { sx += q[0]; sy += q[1]; n++; }
-      consider(n >= 2 ? [sx / n, sy / n] : bq, 'sleeve', -1);
+      const mergeTol = 2.5; let sx = 0, sy = 0, n = 0;
+      for (const q of near) if (Math.hypot(q[0] - bq[0], q[1] - bq[1]) <= mergeTol) { sx += q[0]; sy += q[1]; n++; }
+      const centre = n >= 2 ? [sx / n, sy / n] : bq;
+      return { p: centre, kind: 'sleeve', pri: -1, d: dist(p, centre) };
     }
   }
   // 2) Perpendicular foot when measuring from a sleeve centre — always lock (never free in empty space)
