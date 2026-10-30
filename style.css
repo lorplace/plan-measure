@@ -203,6 +203,8 @@ body:not(.placing) #loupeBtn,body:not(.placing) #loupeMag,body:not(.placing) #st
 body.adj .opt.calbar{display:flex}
 body:not(.caladj) #calSetBtn{display:none}
 body.sleevetool .opt.sz{display:flex}
+body.towall #toWallBtn{display:inline-flex!important}
+#toWallBtn{display:none}
 body[data-tool=select] .opt.col,body[data-tool=pan] .opt.col,body[data-tool=calibrate] .opt.col,body[data-tool=origin] .opt.col,
 body[data-tool=select] .opt.lab,body[data-tool=pan] .opt.lab,body[data-tool=calibrate] .opt.lab,body[data-tool=origin] .opt.lab,body[data-tool=text] .opt.lab{display:none}
 @media (min-width:701px){body:not(.cal) .opt.calbar{display:none!important}}

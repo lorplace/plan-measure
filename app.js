@@ -222,6 +222,7 @@ function drawItem(it, g, isDraft) {
   const grp = el('g', { 'data-id': it.id || '' }, g);
   const ptsStr = it.pts.map(p => p.join(',')).join(' ');
   if (it.type === 'line' || it.type === 'poly' || it.type === 'calibrate') {
+    if (it.ext && it.ext.length === 2) el('path', { d: `M${it.ext[0][0]} ${it.ext[0][1]}L${it.ext[1][0]} ${it.ext[1][1]}`, fill: 'none', stroke: '#90a4ae', 'stroke-width': 1.4 / zoom, 'stroke-dasharray': `${5 / zoom} ${4 / zoom}`, 'stroke-opacity': '0.85', 'pointer-events': 'none' }, grp);
     el('polyline', { points: ptsStr, fill: 'none', stroke: c, 'stroke-width': sw, 'stroke-dasharray': it.type === 'calibrate' ? `${6 / zoom}` : '' }, grp);
     el('polyline', { points: ptsStr, fill: 'none', stroke: 'transparent', 'stroke-width': 14 / zoom, class: 'hit' }, grp);
     it.pts.forEach(p => el('circle', { cx: p[0], cy: p[1], r: 3 / zoom, fill: c }, grp));
@@ -245,7 +246,7 @@ function draw() {
   svg.innerHTML = ''; if (!proj) return;
   const g = el('g', {}, svg);
   proj.items.filter(i => i.page === page).forEach(i => drawItem(i, g));
-  if (draft) { const full = draft.type === 'calibrate' && draft.pts.length === 2; const pts = hover && !full ? draft.pts.concat([hover]) : draft.pts; if (pts.length) drawItem({ ...draft, pts, page, label: draft.label }, g, true);
+  if (draft) { const full = draft.type === 'calibrate' && draft.pts.length === 2; const pts = hover && !full ? draft.pts.concat([hover]) : draft.pts; if (pts.length) { const ext = wallExt ? [wallExt.a, wallExt.b] : draft.ext; drawItem({ ...draft, pts, page, label: draft.label, ext }, g, true); }
     const q = draft.pts[calSel]; if (q) el('circle', { cx: q[0], cy: q[1], r: 7 / zoom, fill: 'none', stroke: '#ffb300', 'stroke-width': 2.5 / zoom }, g); }
   renderList();
 }
@@ -283,7 +284,7 @@ $('#eText').addEventListener('input', e => { const it = selItem(); if (it) { it.
 $('#eExtra').addEventListener('change', e => { const it = selItem(); if (!it) return; const v = e.target.value.trim() ? Units.parseLength(e.target.value, proj.units) : 0; if (isNaN(v)) return toast('Could not read that length'); it.extra = v; changed(); });
 $('#eDel').addEventListener('click', deleteSel);
 function deleteSel() { if (!selId) return; const it = selItem(); deleteItems([selId], (it ? TYPE_NAMES[it.type] : 'Item') + ' deleted'); }
-function changed() { draw(); persistSoon(); commitSoon(); }
+function changed() { for (const k in geomCache) if (geomCache[k]) geomCache[k].sleeve = null; draw(); persistSoon(); commitSoon(); }
 
 // ---------- navigation & zoom ----------
 function gotoPage(n) { if (!doc) return; n = Math.max(1, Math.min(doc.numPages, n)); if (n !== page) { const old = page; page = n; draft = null; const it = proj && proj.items.find(i => i.id === selId); if (it && it.page !== n) selId = null; if (isPhoneDev) releasePage(old); } fitPage(); }
@@ -325,7 +326,7 @@ function finishDraft() {
   if (!draft) return;
   if (draft.type === 'calibrate') { if (draft.pts.length === 2) openCalibrate(); return; }
   const need = { line: 2, poly: 2, area: 3 }[draft.type];
-  if (draft.pts.length >= need) { const it = { id: uid(), type: draft.type, page, pts: draft.pts, color: draft.color, label: draft.label }; proj.items.push(it); selId = null; }
+  if (draft.pts.length >= need) { const it = { id: uid(), type: draft.type, page, pts: draft.pts, color: draft.color, label: draft.label }; if (draft.ext) it.ext = draft.ext; proj.items.push(it); selId = null; }
   draft = null; hover = null; changed();
 }
 $('#finishBtn').onclick = finishDraft;
@@ -340,6 +341,7 @@ function clickAt(p, e) {
     if (prev && dist(prev, p) < 1e-6) return;
     if (tool === 'calibrate' && draft.pts.length >= 2) return;
     draft.pts.push(p); calSel = draft.pts.length - 1;
+    if (tool === 'line' && draft.pts.length === 2 && wallExt) draft.ext = [wallExt.a.slice(), wallExt.b.slice()];
     if ((tool === 'line' || tool === 'calibrate') && draft.pts.length === 2) {
       if (tool === 'line') finishDraft(); else { calSel = 1; toast('Adjust points if needed (drag, arrows), then Set distance.', 4000); }
     }
@@ -659,7 +661,7 @@ $('#calSetBtn').onclick = () => finishDraft();
 vpEl.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !gesture) hideLoupe(); });
 const _udb = updateDrawBar; updateDrawBar = function () { _udb(); const adj = !!draft && draft.pts.length > 0 && PLACE.includes(tool);
   document.body.classList.toggle('adj', adj); document.body.classList.toggle('caladj', !!draft && draft.type === 'calibrate' && draft.pts.length === 2);
-  document.body.classList.toggle('placing', PLACE.includes(tool)); document.body.classList.toggle('aimtool', PLACE.includes(tool) || ['count', 'sleeve', 'origin'].includes(tool)); document.body.classList.toggle('sleevetool', tool === 'sleeve'); $('#ptSel').textContent = 'Point ' + (Math.min(calSel, draft ? draft.pts.length - 1 : 0) + 1); };
+  document.body.classList.toggle('placing', PLACE.includes(tool)); document.body.classList.toggle('aimtool', PLACE.includes(tool) || ['count', 'sleeve', 'origin'].includes(tool)); document.body.classList.toggle('sleevetool', tool === 'sleeve'); $('#ptSel').textContent = 'Point ' + (Math.min(calSel, draft ? draft.pts.length - 1 : 0) + 1); try { syncToWallUi(); } catch (e) { } };
 const _setTool = setTool; setTool = function (t) { hideLoupe(); snapHit = null; _setTool(t); };
 document.querySelectorAll('.tool').forEach(b => b.onclick = () => setTool(b.dataset.tool));
 
@@ -697,6 +699,19 @@ function gridAdd(grid, i, x1, y1, x2, y2) {
   const seen = new Set(); for (let s = 0; s <= steps; s++) { const t = s / steps, x = x1 + (x2 - x1) * t, y = y1 + (y2 - y1) * t;
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) { const k = (Math.floor(x / CELL) + dx) + ',' + (Math.floor(y / CELL) + dy); if (seen.has(k)) continue; seen.add(k); let c = grid.get(k); if (!c) grid.set(k, c = []); c.push(i); } }
 }
+function extractAxisSegs(pix) {
+  const { width: W, height: Hh, data } = pix, dark = (x, y) => x >= 0 && y >= 0 && x < W && y < Hh && (data[(y * W + x) * 4] * .3 + data[(y * W + x) * 4 + 1] * .59 + data[(y * W + x) * 4 + 2] * .11) < 110;
+  const minL = Math.max(24, 0.03 * Math.min(W, Hh)), segs = [], step = 2;
+  for (let y = 0; y < Hh; y += step) {
+    let x = 0; while (x < W) {
+      while (x < W && !dark(x, y)) x++; if (x >= W) break; const x0 = x; while (x < W && dark(x, y)) x++;
+      if (x - x0 >= minL) segs.push([x0 + 0.5, y + 0.5, x - 0.5, y + 0.5]); } }
+  for (let x = 0; x < W; x += step) {
+    let y = 0; while (y < Hh) {
+      while (y < Hh && !dark(x, y)) y++; if (y >= Hh) break; const y0 = y; while (y < Hh && dark(x, y)) y++;
+      if (y - y0 >= minL) segs.push([x + 0.5, y0 + 0.5, x + 0.5, y - 0.5]); } }
+  return segs;
+}
 async function buildGeom(pg) {
   if (geomCache[pg]) return geomCache[pg];
   const G = { segs: [], grid: new Map(), ready: false }, d = doc;
@@ -711,7 +726,11 @@ async function buildGeom(pg) {
     const KN = ['end', 'mid', 'center']; G.pts = { get: i => [M.px[2 * i], M.px[2 * i + 1], KN[M.pK[i]]] };
     for (let i = 0; i < M.nPts; i++) if (!hidL[M.pL[i]]) { const k = Math.floor(M.px[2 * i] / CELL) + ',' + Math.floor(M.px[2 * i + 1] / CELL); let c = G.pgrid.get(k); if (!c) G.pgrid.set(k, c = []); c.push(i); }
     for (let i = 0; i < idx.length; i++) { const j = idx[i]; gridAdd(G.grid, i, sx[4 * j], sx[4 * j + 1], sx[4 * j + 2], sx[4 * j + 3]); } G.ready = true; return G; }
-  if (d.type === 'image') { const c = document.createElement('canvas'); c.width = d.sizes[1].w; c.height = d.sizes[1].h; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(d.img, 0, 0); G.pix = x.getImageData(0, 0, c.width, c.height); c.width = c.height = 0; G.ready = true; return G; }
+  if (d.type === 'image') { const c = document.createElement('canvas'); c.width = d.sizes[1].w; c.height = d.sizes[1].h; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(d.img, 0, 0); G.pix = x.getImageData(0, 0, c.width, c.height); c.width = c.height = 0;
+    // Axis-aligned dark runs for perpendicular-to-wall only (keep on-line snap on dark pixels, as before).
+    const segs = extractAxisSegs(G.pix); G.wallPx = new Float64Array(segs.length * 4); G.wallN = segs.length; G.wallGrid = new Map();
+    for (let i = 0; i < segs.length; i++) { const o = 4 * i, s = segs[i]; G.wallPx[o] = s[0]; G.wallPx[o + 1] = s[1]; G.wallPx[o + 2] = s[2]; G.wallPx[o + 3] = s[3]; gridAdd(G.wallGrid, i, s[0], s[1], s[2], s[3]); }
+    G.ready = true; return G; }
   // Reuse the operator list pdf.js already holds from drawing the page; asking for it again made the worker parse the
   // whole page a second time and kept a second copy in memory.
   let page, ops;
@@ -753,67 +772,234 @@ function projSeg(p, s) { const dx = s[2] - s[0], dy = s[3] - s[1], L2 = dx * dx 
 function segX(a, b) { const d = (a[2] - a[0]) * (b[3] - b[1]) - (a[3] - a[1]) * (b[2] - b[0]); if (Math.abs(d) < 1e-9) return null;
   const t = ((b[0] - a[0]) * (b[3] - b[1]) - (b[1] - a[1]) * (b[2] - b[0])) / d, u = ((b[0] - a[0]) * (a[3] - a[1]) - (b[1] - a[1]) * (a[2] - a[0])) / d;
   if (t < -1e-6 || t > 1 + 1e-6 || u < -1e-6 || u > 1 + 1e-6) return null; return [a[0] + t * (a[2] - a[0]), a[1] + t * (a[3] - a[1])]; }
-function findSnap(p, r, exclude) {
+function isOrangePx(r, g, b) { return r > 200 && g > 90 && g < 230 && b < 130 && r > g + 30 && g > b + 30; }
+function dedupePts(pts, tol) { const out = []; for (const p of pts) { if (!out.some(q => Math.hypot(q[0] - p[0], q[1] - p[1]) < tol)) out.push(p); } return out; }
+function sleeveGridAdd(grid, i, x, y) { const k = Math.floor(x / CELL) + ',' + Math.floor(y / CELL); let c = grid.get(k); if (!c) grid.set(k, c = []); c.push(i); }
+function buildSleeveIndex(G, pts) {
+  const tol = 1e-4 * Math.max(doc.sizes[page].w, doc.sizes[page].h);
+  const uniq = dedupePts(pts, Math.max(tol, 0.5));
+  const n = uniq.length, xy = new Float64Array(n * 2), grid = new Map();
+  for (let i = 0; i < n; i++) { xy[2 * i] = uniq[i][0]; xy[2 * i + 1] = uniq[i][1]; sleeveGridAdd(grid, i, uniq[i][0], uniq[i][1]); }
+  G.sleeve = { gen: contentGen, page, n, xy, grid }; return G.sleeve;
+}
+function collectCadSleevePts() {
+  const M = doc.cad, hid = (proj && proj.hidden) || {}, sfx = commonSuffix(M), out = [];
+  const vis = L => !hid[M.layerNames[L]];
+  for (const s of M.inserts) { if (!vis(s.L)) continue; if (slvMatch(shortName(s.name, sfx)) || slvMatch(M.layerNames[s.L])) out.push([s.x, s.y]); }
+  for (const c of M.circles) { if (!vis(c.L)) continue; if (slvMatch(M.layerNames[c.L])) out.push([c.x, c.y]); }
+  return out;
+}
+function clusterOrange(data, W, H, scale, minN, maxN) {
+  // scale: page units per pixel; mark visited in a Uint8Array
+  const seen = new Uint8Array(W * H), pts = [];
+  const isO = i => { const o = i * 4; return isOrangePx(data[o], data[o + 1], data[o + 2]); };
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i0 = y * W + x; if (seen[i0] || !isO(i0)) continue;
+    let q = [i0], qi = 0, n = 0, sx = 0, sy = 0; seen[i0] = 1;
+    while (qi < q.length && n < maxN * 4) {
+      const i = q[qi++], px = i % W, py = (i - px) / W; n++; sx += px; sy += py;
+      for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue; const nx = px + dx, ny = py + dy; if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const j = ny * W + nx; if (seen[j] || !isO(j)) continue; seen[j] = 1; q.push(j); } }
+    if (n >= minN && n <= maxN) pts.push([(sx / n + 0.5) * scale, (sy / n + 0.5) * scale]);
+  }
+  return pts;
+}
+function scanOrangeFromPix(G) {
+  if (!G.pix) return [];
+  const { width: W, height: Hh, data } = G.pix;
+  // downsample for speed on large images: walk every 2nd pixel via clustering still visits neighbors
+  return clusterOrange(data, W, Hh, 1, 4, 400);
+}
+async function scanOrangeFromPdf(pg) {
+  const { w, h } = doc.sizes[pg];
+  const maxPx = isPhoneDev ? 1.5e6 : 3e6; let r = Math.min(1.2, Math.sqrt(maxPx / (w * h)));
+  // Prefer the already-drawn base bitmap when it covers the page (no extra canvas).
+  if (base._ok && base._key === viewKey() && base._r > 0.15) {
+    try {
+      const ctx = base.getContext('2d', { willReadFrequently: true });
+      const { width: W, height: Hh } = base; const data = ctx.getImageData(0, 0, W, Hh).data;
+      return clusterOrange(data, W, Hh, 1 / base._r, 3, 500);
+    } catch (e) { /* fall through to one-shot scan */ }
+  }
+  const cw = Math.max(1, Math.ceil(w * r)), ch = Math.max(1, Math.ceil(h * r));
+  const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  const job = { dead: false }; try { await paintRegion(ctx, cw, ch, { x0: 0, y0: 0, w, h }, r, job); }
+  catch (e) { c.width = c.height = 0; return []; }
+  const data = ctx.getImageData(0, 0, cw, ch).data; const pts = clusterOrange(data, cw, ch, 1 / r, 3, 500);
+  c.width = c.height = 0; return pts;
+}
+async function ensureSleeveSnap(pg) {
+  const G = await buildGeom(pg); if (!G.ready) return G;
+  if (G.sleeve && G.sleeve.gen === contentGen && G.sleeve.page === pg && G.sleeve.n >= 0) return G;
+  const pts = [];
+  if (proj) for (const it of proj.items) if (it.type === 'sleeve' && it.page === pg && it.pts && it.pts[0]) pts.push(it.pts[0]);
+  if (doc.type === 'cad') pts.push(...collectCadSleevePts());
+  else if (doc.type === 'image') pts.push(...scanOrangeFromPix(G));
+  else if (doc.type === 'pdf') pts.push(...(await scanOrangeFromPdf(pg)));
+  buildSleeveIndex(G, pts); return G;
+}
+function nearSleevePts(G, p, r) {
+  if (!G || !G.sleeve || !G.sleeve.n) return [];
+  const { xy, grid, n } = G.sleeve, out = [], c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
+  const seen = new Set();
+  for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) {
+    const cell = grid.get(cx + ',' + cy); if (!cell) continue;
+    for (const i of cell) { if (seen.has(i)) continue; seen.add(i); const x = xy[2 * i], y = xy[2 * i + 1]; if (Math.hypot(x - p[0], y - p[1]) <= r) out.push([x, y]); } }
+  return out;
+}
+function isSleeveCentrePt(p, tol) {
+  const G = geomCache[page]; if (!G || !G.sleeve) return false; const t = tol != null ? tol : 1.5 / zoom;
+  return nearSleevePts(G, p, t).some(q => Math.hypot(q[0] - p[0], q[1] - p[1]) < t);
+}
+function infinitePerp(p, s) {
+  const dx = s[2] - s[0], dy = s[3] - s[1], L2 = dx * dx + dy * dy;
+  if (!L2) return { foot: [s[0], s[1]], t: 0, onSeg: true, seg: s };
+  const t = ((p[0] - s[0]) * dx + (p[1] - s[1]) * dy) / L2;
+  const foot = [s[0] + t * dx, s[1] + t * dy];
+  return { foot, t, onSeg: t >= -1e-6 && t <= 1 + 1e-6, seg: s };
+}
+function wallExtPts(s, t) {
+  if (t >= 0 && t <= 1) return null;
+  const end = t < 0 ? [s[0], s[1]] : [s[2], s[3]];
+  const foot = [s[0] + t * (s[2] - s[0]), s[1] + t * (s[3] - s[1])];
+  return [end, foot];
+}
+function minWallLen() { const { w, h } = doc.sizes[page]; return 0.012 * Math.min(w, h); }
+function nearWallIds(G, p, r) {
+  if (G.wallGrid && G.wallN) {
+    const out = new Set(); const c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
+    for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) { const c = G.wallGrid.get(cx + ',' + cy); if (c) c.forEach(i => out.add(i)); }
+    return [...out];
+  }
+  return nearSegs(G, p, r);
+}
+function wallSegAt(G, i) {
+  if (G.wallPx && G.wallN) return [G.wallPx[4 * i], G.wallPx[4 * i + 1], G.wallPx[4 * i + 2], G.wallPx[4 * i + 3]];
+  return G.segs[i];
+}
+function nearestPerpWall(from, toward, searchR) {
+  const G = geomCache[page]; if (!G || !G.ready) return null;
+  const hasWall = (G.wallN && G.wallN > 0) || (G.segs && G.segs.length); if (!hasWall) return null;
+  const R = searchR != null ? searchR : Math.max(doc.sizes[page].w, doc.sizes[page].h);
+  const around = toward || from; const ids = nearWallIds(G, around, R).slice(0, 600);
+  for (const i of nearWallIds(G, from, R).slice(0, 400)) if (!ids.includes(i)) ids.push(i);
+  const minL = minWallLen(); let best = null;
+  for (const i of ids) {
+    const s = wallSegAt(G, i); if (!s || s[4]) continue;
+    const len = Math.hypot(s[2] - s[0], s[3] - s[1]); if (len < minL) continue;
+    const hit = infinitePerp(from, s); const dLen = dist(from, hit.foot); if (dLen < 1e-6) continue;
+    const dPtr = toward ? dist(toward, hit.foot) : dLen;
+    if (!best || dPtr < best.dPtr - 1e-6 || (Math.abs(dPtr - best.dPtr) < 1e-6 && dLen < best.dLen))
+      best = { foot: hit.foot, onSeg: hit.onSeg, t: hit.t, seg: s.slice(0, 4), dPtr, dLen, ext: hit.onSeg ? null : wallExtPts(s, hit.t) };
+  }
+  return best;
+}
+let wallExt = null; // { a:[x,y], b:[x,y] } fictional wall continuation while aiming / on item
+function findSnap(p, r, exclude, opts) {
   const G = geomCache[page]; let best = null; const consider = (q, kind, pri) => { const d = dist(p, q); if (d <= r && (!best || pri < best.pri || (pri === best.pri && d < best.d))) best = { p: q, kind, pri, d }; };
-  // markup points (existing items and current draft)
+  opts = opts || {};
+  // 1) Sleeve centres / orange anchors — highest priority within the snap radius (win over nearby lines)
+  if (G && G.sleeve) for (const q of nearSleevePts(G, p, r)) consider(q, 'sleeve', -1);
+  // 2) Optional perpendicular foot when measuring from a sleeve centre
+  if (opts.perpFrom) {
+    const hit = nearestPerpWall(opts.perpFrom, p, Math.max(r * 8, 80 / zoom));
+    if (hit) {
+      const pr = Math.max(r * 2.5, 28 / zoom); // generous so the foot is easy to catch on a phone
+      if (dist(p, hit.foot) <= pr) { consider(hit.foot, hit.onSeg ? 'perp' : 'perp-ext', -2); if (best && (best.kind === 'perp' || best.kind === 'perp-ext')) wallExt = hit.ext ? { a: hit.ext[0], b: hit.ext[1] } : null; }
+    }
+  }
+  // 3) Markup points
   for (const it of proj.items) if (it.page === page) for (const q of it.pts) if (q !== exclude) consider(q, 'end', 0);
   if (draft) for (const q of draft.pts) if (q !== exclude) consider(q, 'end', 0);
+  // 4) Plan geometry: ends / mids / centres / intersections, then lines
   if (G && G.ready && G.segs.length) { const ids = nearSegs(G, p, r).slice(0, 400), S = ids.map(i => G.segs[i]);
-    for (const s of S) if (!s[4]) { consider([s[0], s[1]], 'end', 0); consider([s[2], s[3]], 'end', 0); }
+    for (const s of S) if (!s[4]) { consider([s[0], s[1]], 'end', 1); consider([s[2], s[3]], 'end', 1); }
     if (G.pgrid) { const c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
-      for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) for (const i of (G.pgrid.get(cx + ',' + cy) || [])) { const q = G.pts.get ? G.pts.get(i) : G.pts[i]; consider([q[0], q[1]], q[2], 0); } }
+      for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) for (const i of (G.pgrid.get(cx + ',' + cy) || [])) { const q = G.pts.get ? G.pts.get(i) : G.pts[i]; consider([q[0], q[1]], q[2], q[2] === 'center' ? 1 : 1); } }
     { const near = S.filter(s => dist(projSeg(p, s), p) <= r).slice(0, 80);
-      for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) { const x = segX(near[i], near[j]); if (x) consider(x, 'x', 0); }
-      if (!best) for (const s of near) consider(projSeg(p, s), 'line', 2); } }
-  if (!best && G && G.pix) { // image: nearest dark pixel, refined to centre of the dark stroke
+      for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) { const x = segX(near[i], near[j]); if (x) consider(x, 'x', 1); }
+      if (!best || best.pri > 1) for (const s of near) consider(projSeg(p, s), 'line', 2); } }
+  if ((!best || best.pri > 1) && G && G.pix) { // image: nearest dark pixel, refined to centre of the dark stroke
     const { width: W, height: Hh, data } = G.pix, R = Math.ceil(r), x0 = Math.round(p[0]), y0 = Math.round(p[1]); let bd = 1e9, bq = null;
     const dark = (x, y) => x >= 0 && y >= 0 && x < W && y < Hh && (data[(y * W + x) * 4] * .3 + data[(y * W + x) * 4 + 1] * .59 + data[(y * W + x) * 4 + 2] * .11) < 110;
     for (let y = y0 - R; y <= y0 + R; y++) for (let x = x0 - R; x <= x0 + R; x++) if (dark(x, y)) { const d = (x - p[0]) ** 2 + (y - p[1]) ** 2; if (d < bd) { bd = d; bq = [x, y]; } }
-    if (bq && Math.sqrt(bd) <= r) { // centre across stroke: average dark run horizontally and vertically, take the shorter run's centre
+    if (bq && Math.sqrt(bd) <= r) {
       const run = (dx, dy) => { let a = 0, b = 0; while (a < 12 && dark(bq[0] - dx * (a + 1), bq[1] - dy * (a + 1))) a++; while (b < 12 && dark(bq[0] + dx * (b + 1), bq[1] + dy * (b + 1))) b++; return [a, b]; };
       const [ha, hb] = run(1, 0), [va, vb] = run(0, 1); let q;
       if (ha + hb <= va + vb) q = [bq[0] + (hb - ha) / 2 + 0.5, p[1]]; else q = [p[0], bq[1] + (vb - va) / 2 + 0.5];
-      best = { p: q, kind: 'line', pri: 2, d: 0 }; } }
+      consider(q, 'line', 2); } }
   return best;
 }
 function aim(p, e, prev, exclude) {
   let q = p; const ortho = prev && (e.shiftKey || shiftDown);
   if (ortho) q = snapOrtho(prev, q);
-  snapHit = null; guide = null;
+  snapHit = null; guide = null; wallExt = null;
   const touchR = e.pointerType && e.pointerType !== 'mouse';
   const st = !ortho && prev && straightOn && !e.altKey && PLACE.includes(tool) && proj ? straighten(p, prev, (touchR ? 14 : 8) / zoom, exclude) : null;
   if (st) q = st.q;
   if (snapOn && !e.altKey && doc && proj) {
     if (!geomCache[page]) buildGeom(page);
-    const r = (touchR ? 22 : 12) / zoom, h = findSnap(ortho ? q : p, r, exclude);
-    if (h) { snapHit = { p: h.p.slice(), kind: h.kind }; q = h.p.slice(); if (ortho) { const hz = Math.abs(p[0] - prev[0]) >= Math.abs(p[1] - prev[1]); q = hz ? [h.p[0], prev[1]] : [prev[0], h.p[1]]; snapHit.p = q; }
-      else if (st) { // snap wins; keep the straight direction / alignment when the snapped point allows it
+    const r = (touchR ? 22 : 12) / zoom;
+    const fromSleeve = !!(prev && tool === 'line' && isSleeveCentrePt(prev, Math.max(3 / zoom, 0.5)));
+    const h = findSnap(ortho ? q : p, r, exclude, fromSleeve ? { perpFrom: prev } : null);
+    if (h) { snapHit = { p: h.p.slice(), kind: h.kind === 'sleeve' ? 'center' : h.kind === 'perp' || h.kind === 'perp-ext' ? h.kind : h.kind }; q = h.p.slice();
+      if (h.kind === 'perp' || h.kind === 'perp-ext') { /* wallExt set inside findSnap */ }
+      else wallExt = null;
+      if (ortho) { const hz = Math.abs(p[0] - prev[0]) >= Math.abs(p[1] - prev[1]); q = hz ? [h.p[0], prev[1]] : [prev[0], h.p[1]]; snapHit.p = q; wallExt = null; }
+      else if (st && h.kind !== 'perp' && h.kind !== 'perp-ext' && h.kind !== 'sleeve') {
         const k = keepStraight(h, st, prev, r); if (k) { q = k; snapHit.p = k; guide = Object.assign({}, st, { q: k }); } else guide = straightInfo(q, prev, exclude); } }
     else if (st) guide = st;
   } else if (st) guide = st;
-  showSnapMark(); return q;
+  showSnapMark(); syncToWallUi(); return q;
 }
 function drawSnapMark(ctx, x, y, kind, s, lw) { ctx.save(); ctx.strokeStyle = '#00c853'; ctx.lineWidth = lw; ctx.beginPath();
   if (kind === 'end') ctx.rect(x - s, y - s, 2 * s, 2 * s); else if (kind === 'x') { ctx.moveTo(x - s, y - s); ctx.lineTo(x + s, y + s); ctx.moveTo(x + s, y - s); ctx.lineTo(x - s, y + s); }
-  else if (kind === 'mid') { ctx.moveTo(x, y - s); ctx.lineTo(x + s, y + s); ctx.lineTo(x - s, y + s); ctx.closePath(); } else if (kind === 'center') { ctx.arc(x, y, s, 0, 7); }
+  else if (kind === 'mid') { ctx.moveTo(x, y - s); ctx.lineTo(x + s, y + s); ctx.lineTo(x - s, y + s); ctx.closePath(); } else if (kind === 'center' || kind === 'sleeve') { ctx.arc(x, y, s, 0, 7); }
+  else if (kind === 'perp' || kind === 'perp-ext') { ctx.moveTo(x - s, y); ctx.lineTo(x + s, y); ctx.moveTo(x, y - s); ctx.lineTo(x, y + s); ctx.stroke(); ctx.beginPath(); ctx.arc(x, y, s * 0.55, 0, 7); }
   else { ctx.moveTo(x - s, y); ctx.lineTo(x, y - s); ctx.lineTo(x + s, y); ctx.lineTo(x, y + s); ctx.closePath(); } ctx.stroke(); ctx.restore(); }
 function showSnapMark() { let g = svg.querySelector('#snapG'); if (!g) { g = el('g', { id: 'snapG', 'pointer-events': 'none' }, svg); } g.innerHTML = '';
-  drawGuideSvg(g); if (!snapHit) return; const [x, y] = snapHit.p, s = 7 / zoom, w = 2 / zoom, A = { fill: 'none', stroke: '#00c853', 'stroke-width': w };
-  if (snapHit.kind === 'end') el('rect', { ...A, x: x - s, y: y - s, width: 2 * s, height: 2 * s }, g);
-  else if (snapHit.kind === 'x') el('path', { ...A, d: `M${x - s} ${y - s}L${x + s} ${y + s}M${x + s} ${y - s}L${x - s} ${y + s}` }, g);
-  else if (snapHit.kind === 'mid') el('path', { ...A, d: `M${x} ${y - s}L${x + s} ${y + s}L${x - s} ${y + s}Z` }, g);
-  else if (snapHit.kind === 'center') el('circle', { ...A, cx: x, cy: y, r: s }, g);
+  drawGuideSvg(g); drawWallExtSvg(g); if (!snapHit) return; const [x, y] = snapHit.p, s = 7 / zoom, w = 2 / zoom, A = { fill: 'none', stroke: '#00c853', 'stroke-width': w };
+  const kind = snapHit.kind;
+  if (kind === 'end') el('rect', { ...A, x: x - s, y: y - s, width: 2 * s, height: 2 * s }, g);
+  else if (kind === 'x') el('path', { ...A, d: `M${x - s} ${y - s}L${x + s} ${y + s}M${x + s} ${y - s}L${x - s} ${y + s}` }, g);
+  else if (kind === 'mid') el('path', { ...A, d: `M${x} ${y - s}L${x + s} ${y + s}L${x - s} ${y + s}Z` }, g);
+  else if (kind === 'center' || kind === 'sleeve') el('circle', { ...A, cx: x, cy: y, r: s }, g);
+  else if (kind === 'perp' || kind === 'perp-ext') { el('path', { ...A, d: `M${x - s} ${y}L${x + s} ${y}M${x} ${y - s}L${x} ${y + s}` }, g); el('circle', { ...A, cx: x, cy: y, r: s * 0.55 }, g); }
   else el('path', { ...A, d: `M${x - s} ${y}L${x} ${y - s}L${x + s} ${y}L${x} ${y + s}Z` }, g);
-  g.dataset.kind = snapHit.kind; }
+  g.dataset.kind = kind === 'sleeve' ? 'center' : kind; }
+function drawWallExtSvg(g) {
+  const ext = (draft && draft.ext) || wallExt; if (!ext) return;
+  const a = ext.a || ext[0], b = ext.b || ext[1]; if (!a || !b) return;
+  const w = 1.4 / zoom;
+  el('path', { fill: 'none', stroke: '#90a4ae', 'stroke-width': w, 'stroke-dasharray': `${5 / zoom} ${4 / zoom}`, 'stroke-opacity': '0.85', d: `M${a[0]} ${a[1]}L${b[0]} ${b[1]}` }, g);
+}
+function syncToWallUi() {
+  const show = !!(tool === 'line' && draft && draft.type === 'line' && draft.pts.length === 1 && isSleeveCentrePt(draft.pts[0], Math.max(3 / zoom, 0.5)));
+  document.body.classList.toggle('towall', show);
+  const b = $('#toWallBtn'); if (b) b.hidden = !show;
+}
+function applyToWall() {
+  if (!(tool === 'line' && draft && draft.pts.length === 1)) return;
+  if (!geomCache[page]) return toast('Still preparing the drawing…');
+  const hit = nearestPerpWall(draft.pts[0], null, Math.max(doc.sizes[page].w, doc.sizes[page].h));
+  if (!hit) return toast('No wall or line nearby to measure to.');
+  draft.pts.push(hit.foot.slice());
+  if (hit.ext) draft.ext = [hit.ext[0].slice(), hit.ext[1].slice()];
+  wallExt = hit.ext ? { a: hit.ext[0], b: hit.ext[1] } : null;
+  finishDraft(); toast('Measured perpendicular to wall' + (hit.onSeg ? '' : ' (extended)'));
+}
+$('#toWallBtn').onclick = () => applyToWall();
 const _draw3 = draw; draw = function () { _draw3(); if (snapHit && (PLACE.includes(tool) || ['count', 'sleeve', 'origin'].includes(tool) || gesture)) showSnapMark(); };
 const _loadDoc = loadDoc; loadDoc = async function (...a) { for (const k in geomCache) delete geomCache[k]; const r = await _loadDoc(...a); return r; };
 vpEl.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !gesture) { snapHit = null; showSnapMark(); } });
-window.PMsnap = { buildGeom: pg => buildGeom(pg), get hit() { return snapHit; }, geom: geomCache };
+window.PMsnap = { buildGeom: pg => buildGeom(pg), ensureSleeveSnap: pg => ensureSleeveSnap(pg), findSnap, nearestPerpWall, isSleeveCentrePt, get hit() { return snapHit; }, get wallExt() { return wallExt; }, geom: geomCache };
 // Snap geometry is built when something uses it: CAD drawings, a page with sleeves, or a measuring tool in hand.
 // Building it on every open made heavy PDFs slower to open and is wasted when you only look at the plan.
 const snapTool = t => PLACE.includes(t) || ['count', 'sleeve', 'origin'].includes(t);
 const geomWanted = () => !!doc && (doc.type === 'cad' || snapTool(tool) || !!(proj && proj.items.some(i => i.page === page && i.type === 'sleeve')));
-const warmGeom = () => { if (doc && !geomCache[page]) buildGeom(page).then(() => draw()).catch(() => { }); };
+const warmGeom = () => { if (!doc) return; const go = () => ensureSleeveSnap(page).then(() => draw()).catch(() => { }); if (!geomCache[page]) buildGeom(page).then(go).catch(() => { }); else go(); };
 const _rc = renderCanvas; renderCanvas = async function () { await _rc(); if (geomWanted()) warmGeom(); };
 const _setToolG = setTool; setTool = function (t) { _setToolG(t); if (snapTool(t)) warmGeom(); };
 
@@ -877,7 +1063,7 @@ function buildSleeveCSV() {
 $('#sleeveCsvBtn').onclick = () => { if (!proj) return; if (!proj.items.some(i => i.type === 'sleeve')) return toast('No sleeves yet. Use the Sleeve tool.'); download('\ufeff' + buildSleeveCSV(), proj.name + '-sleeves.csv', 'text/csv'); };
 Object.assign(window.PM, { buildSleeveCSV, sleeveInfo }); Object.defineProperty(window.PM, 'origins', { get: () => proj.origins });
 // ---- Find sleeves (CAD auto-detection) ----
-const SLV_KEYS = ['SLEEVE', 'SLV', 'MANCHON', 'PEN', 'PENETRATION', 'CORE', 'CORING', 'FOURREAU'];
+const SLV_KEYS = ['SLEEVE', 'SLV', 'MANCHON', 'PEN', 'PENETRATION', 'CORE', 'CORING', 'FOURREAU', 'HILTI', 'ANCHOR'];
 function slvMatch(s) { s = String(s || '').toUpperCase(); if (/SLEEVE|MANCHON|PENETRATION|FOURREAU|CORING/.test(s)) return true; return s.split(/[^A-Z0-9]+/).some(t => SLV_KEYS.some(k => t.startsWith(k) && /^\d*$/.test(t.slice(k.length)))); }
 const NOMINAL_IN = [0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10, 12, 14, 16];
 const inStr = v => { const w = Math.floor(v + 1e-9), f = v - w; const fr = { 0.25: '1/4', 0.5: '1/2', 0.75: '3/4' }[Math.round(f * 4) / 4] || ''; return (w ? w + (fr ? '-' + fr : '') : fr) + '"'; };
