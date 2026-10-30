@@ -4,15 +4,49 @@ const $ = s => document.querySelector(s);
 const SVGNS = 'http://www.w3.org/2000/svg';
 const vpEl = $('#viewport'), stage = $('#stage'), canvas = $('#canvas'), svg = $('#svg');
 const TYPE_NAMES = {line:'Length', poly:'Pipe run', area:'Area', count:'Count', text:'Note', sleeve:'Sleeve'};
+// ---- icons (inline SVG, no external assets; 24px grid, 1.8 stroke) ----
+const ICONS = {
+ open:'<path d="M3 19V6a1 1 0 011-1h5l2 2h8a1 1 0 011 1v3"/><path d="M3 19l2.6-7.2A1.2 1.2 0 016.7 11H21l-2.7 7.3a1.2 1.2 0 01-1.1.7z"/>',
+ save:'<path d="M5 4h11l4 4v11a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1z"/><path d="M8 4v5h7V4M7.5 20v-6h9v6"/>',
+ folder:'<path d="M3 6.5a1 1 0 011-1h5l2 2h9a1 1 0 011 1V18a1 1 0 01-1 1H4a1 1 0 01-1-1z"/><path d="M3 10.5h18"/>',
+ file:'<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12.5h6M9 16h4"/>',
+ left:'<path d="M14.5 6l-6 6 6 6"/>', right:'<path d="M9.5 6l6 6-6 6"/>', up:'<path d="M6 14.5l6-6 6 6"/>', down:'<path d="M6 9.5l6 6 6-6"/>',
+ minus:'<path d="M5 12h14"/>', plus:'<path d="M5 12h14M12 5v14"/>',
+ fit:'<path d="M4 9V5a1 1 0 011-1h4M20 9V5a1 1 0 00-1-1h-4M4 15v4a1 1 0 001 1h4M20 15v4a1 1 0 01-1 1h-4"/>',
+ ruler:'<path d="M3.5 15.5l12-12 5 5-12 12z"/><path d="M7.5 11.5l2 2M10.5 8.5l2 2M13.5 5.5l2 2"/>',
+ table:'<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9.5h18M3 14.5h18M9 4v16"/>',
+ download:'<path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 20h14"/>',
+ export:'<path d="M12 15V4M7.5 8.5L12 4l4.5 4.5"/><path d="M5 13v6a1 1 0 001 1h12a1 1 0 001-1v-6"/>',
+ print:'<path d="M7 9V4h10v5"/><rect x="3" y="9" width="18" height="8" rx="1.5"/><path d="M7 14h10v6H7z"/>',
+ panel:'<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M15 4v16"/>', close:'<path d="M6 6l12 12M18 6L6 18"/>', check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+ undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 010 11H11"/>', redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 000 11H13"/>',
+ snap:'<rect x="8" y="8" width="8" height="8" rx="1"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/>', sleeve:'<circle cx="12" cy="12" r="7"/><path d="M4 12h16M12 4v16"/>',
+ origin:'<path d="M5 19V4M5 19h15"/><path d="M2.5 6.5L5 4l2.5 2.5M17.5 16.5L20 19l-2.5 2.5"/>', layers:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+ find:'<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20"/><circle cx="10.5" cy="10.5" r="2.2"/>', select:'<path d="M6 3.5l12.5 7.6-5.4 1.5-2.5 5.9z"/>',
+ loupe:'<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20M10.5 7.5v6M7.5 10.5h6"/>',
+ more:'<circle cx="5.5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="18.5" cy="12" r="1.5" fill="currentColor"/>',
+ hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
+ cal:'<path d="M5 19L19 5"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="5" r="2"/><path d="M9.5 9.5l-2-2M14.5 14.5l2 2"/>',
+ line:'<path d="M4 12h16M4 8v8M20 8v8"/><path d="M2.5 13.5l3-3M18.5 13.5l3-3"/>',
+ poly:'<path d="M3.5 19h5.5V9h6v6h5.5"/><circle cx="3.5" cy="19" r="1.5"/><circle cx="20.5" cy="15" r="1.5"/>',
+ area:'<path d="M4 7.5l11-3.5 5 9-7 7-9-4z" fill="currentColor" fill-opacity=".18"/>',
+ zone:'<path d="M4 7.5l11-3.5 5 9-7 7-9-4z"/><path d="M5.5 12.5l6.5-6.5M7.5 16l8.5-8.5M11 18l6.5-6.5" stroke-width="1.3"/>',
+ count:'<circle cx="7" cy="8" r="2.6"/><circle cx="17" cy="8" r="2.6"/><circle cx="12" cy="16.5" r="2.6"/>', text:'<path d="M5 6.5V4.5h14v2M12 4.5v15M9 19.5h6"/>',
+ keys:'<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h.01M10 10h.01M13.5 10h.01M17 10h.01M7.5 14h9"/>',
+ edit:'<path d="M4 20h4L19 9a2.8 2.8 0 00-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
+ trash:'<path d="M4 7h16M9 7V4.5h6V7M6 7l1 13h10l1-13M10 11v5.5M14 11v5.5"/>',
+ warn:'<path d="M12 4l9 16H3z"/><path d="M12 10v4.5M12 17.5h.01"/>', clock:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'
+};
+const svgIc = (n, cls = 'ic') => `<svg class="${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 
 let doc = null;          // {type,name,bytes,pdf,img,numPages,sizes:[{w,h}],vps:[]}
 let proj = null;         // {id,name,units,scales:{},items:[]}
 let page = 1, zoom = 1, tool = 'select', draft = null, hover = null, selId = null;
-let renderTask = null, renderTimer = null, shiftDown = false, guide = null, straightOn = localStorage.getItem('pm-straight') !== '0';
+let renderTimer = null, shiftDown = false, guide = null, straightOn = localStorage.getItem('pm-straight') !== '0';
 
 // ---------- helpers ----------
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-function toast(msg, ms = 2500) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = 'none', ms); }
+function toast(msg, ms = 2500) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms); }
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 function polyLen(pts, closed) { let s = 0; for (let i = 1; i < pts.length; i++) s += dist(pts[i - 1], pts[i]); if (closed && pts.length > 2) s += dist(pts[pts.length - 1], pts[0]); return s; }
 function polyArea(pts) { let s = 0; for (let i = 0; i < pts.length; i++) { const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length]; s += x1 * y2 - x2 * y1; } return Math.abs(s) / 2; }
@@ -39,7 +73,7 @@ function snapOrtho(prev, p) { if (!prev) return p; const dx = Math.abs(p[0] - pr
 function fileMime(f) { const n = f.name.toLowerCase(); if (n.endsWith('.dxf')) return 'application/dxf'; if (n.endsWith('.dwg')) return 'application/dwg'; return f.type || (n.endsWith('.pdf') ? 'application/pdf' : 'image/png'); }
 async function onFile(e) { const f = e.target.files[0]; if (!f) return; e.target.value = '';
   if (/\.pmproj$/i.test(f.name)) return openPmproj(f);
-  if (/\.dwg$/i.test(f.name) && isPhoneDev && f.size > 2e6 && !confirm('This DWG is large (' + (f.size / 1e6).toFixed(1) + ' MB). Reading DWG files needs a lot of memory and can close the browser tab on a phone.\n\nTip: open it once on a computer, then More > Save project file, and open that .pmproj file on the phone.\n\nTry anyway?')) return;
+  if (/\.dwg$/i.test(f.name) && isPhoneDev && f.size > 2e6 && !(await ask({ title: 'Open a large DWG?', message: 'This DWG is ' + (f.size / 1e6).toFixed(1) + ' MB. Reading DWG files needs a lot of memory and can close the browser tab on a phone. Tip: open it once on a computer, then More > Save project file, and open that .pmproj file here.', ok: 'Open anyway' }))) return;
   const bytes = new Uint8Array(await f.arrayBuffer());
   if (fileMime(f) === 'application/dwg') toast('Reading DWG (first time loads a 10 MB converter)...', 8000); else toast('Opening...', 8000);
   await new Promise(r => setTimeout(r, 50)); // let the message paint before heavy parsing
@@ -52,13 +86,21 @@ async function onFile(e) { const f = e.target.files[0]; if (!f) return; e.target
 }
 $('#file').addEventListener('change', onFile);
 
+// Plan bytes as a compact Uint8Array. IndexedDB already returns one, so a saved project no longer copies its whole file
+// again on open; a view into a bigger buffer (a .pmproj file) is still copied so only the plan is kept and saved.
+const ownBytes = b => b instanceof Uint8Array && b.byteOffset === 0 && b.byteLength === b.buffer.byteLength ? b : new Uint8Array(b);
 async function loadDoc(bytes, mime, name) {
-  doc = { name, mime, bytes, sizes: [], vps: [] };
+  dropRenders();
+  // Each PDF gets its own pdf.js worker thread holding the whole parsed file. Without this, every plan opened in a session stayed in memory.
+  if (doc && doc.pdf) doc.pdf.destroy().catch(() => { });
+  doc = { name, mime, bytes, sizes: [], vps: [], uid: ++docSeq };
   if (mime === 'application/pdf') {
     doc.type = 'pdf';
     doc.pdf = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
     doc.numPages = doc.pdf.numPages;
-    for (let i = 1; i <= doc.numPages; i++) { const p = await doc.pdf.getPage(i); const vp = p.getViewport({ scale: 1 }); doc.vps[i] = vp; doc.sizes[i] = { w: vp.width, h: vp.height }; }
+    // page sizes for the whole set in one round of requests instead of one page after another
+    const pgs = await Promise.all(Array.from({ length: doc.numPages }, (_, i) => doc.pdf.getPage(i + 1)));
+    pgs.forEach((p, i) => { const vp = p.getViewport({ scale: 1 }); doc.vps[i + 1] = vp; doc.sizes[i + 1] = { w: vp.width, h: vp.height }; });
   } else if (mime === 'application/dxf' || mime === 'application/dwg') {
     doc.type = 'cad'; doc.cad = bytes && bytes.cadPack ? CAD.revive(bytes.cadPack) : await CAD.parseInWorker(bytes, mime === 'application/dxf' ? 'dxf' : 'dwg'); doc.bytes = null; /* raw CAD bytes are not kept */ doc.numPages = 1; doc.sizes[1] = { w: doc.cad.w, h: doc.cad.h };
   } else {
@@ -71,46 +113,106 @@ async function loadDoc(bytes, mime, name) {
 
 // ---------- rendering ----------
 function layout() {
-  document.body.classList.toggle('hasdoc', !!doc); if (!doc) return; const { w, h } = doc.sizes[page];
+  document.body.classList.toggle('hasdoc', !!doc); document.body.classList.toggle('iscad', !!doc && doc.type === 'cad'); syncProjName(); if (!doc) return; const { w, h } = doc.sizes[page];
   stage.style.width = w * zoom + 'px'; stage.style.height = h * zoom + 'px';
   placeCanvas();
   svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
   $('#zoomInfo').textContent = Math.round(zoom * 100) + '%';
   $('#pageInfo').textContent = page + ' / ' + doc.numPages;
-  const s = scaleOf(page);
-  $('#scaleInfo').textContent = 'Scale: ' + (s ? (proj.scaleNames && proj.scaleNames[page] || 'calibrated') : 'not set');
-  $('#scaleInfo').style.color = s ? '#a5d6a7' : '#ffab91';
+  const s = scaleOf(page), si = $('#scaleInfo'), nm = s ? String(proj.scaleNames && proj.scaleNames[page] || 'calibrated') : 'Set scale';
+  $('#scaleVal').textContent = nm.charAt(0).toUpperCase() + nm.slice(1); si.classList.toggle('set', !!s); si.classList.toggle('unset', !s);
+  si.title = s ? 'Scale for this page. Click to change it' : 'This page has no scale yet. Click to set it'; const ic = si.querySelector('svg'), want = s ? 'check' : 'ruler'; if (ic.dataset.n !== want) { ic.innerHTML = ICONS[want]; ic.dataset.n = want; }
   if (!layout.light) draw(); scheduleRender();
 }
-// Renders only the visible part of the page (plus a margin) at the current zoom: small canvas, sharp at any zoom.
-// During pinch / wheel / scroll the existing bitmap is only moved and scaled with CSS; the sharp render happens ~150 ms after the gesture ends.
+// Two bitmaps sit under the markup:
+//   base   (#canvasBase) the whole page at a modest resolution, drawn once per page. It is always there, so moving and
+//          zooming never shows white, and near the fit zoom it is the only thing drawn.
+//   detail (#canvas)     the part on screen plus a margin, at the current zoom. Drawn only when the base is not sharp
+//          enough, and redrawn only when the view leaves it or the zoom changes by more than about 25%.
+// Both reuse their buffers. Creating a fresh canvas for every render made iOS close the tab: it frees canvases lazily, so
+// they piled up while panning. Canvas memory for the plan is now fixed (at most about 9 MP, 36 MB, on a phone).
+// During pinch / wheel / scroll the bitmaps are only moved and scaled with CSS; drawing happens ~150 ms after the gesture ends.
 const isPhoneDev = matchMedia('(pointer:coarse)').matches || /iPhone|iPad|iPod/.test(navigator.userAgent);
-function visRegion() { const { w, h } = doc.sizes[page], vr = vpEl.getBoundingClientRect(), sr = stage.getBoundingClientRect();
-  const vx0 = (vr.left - sr.left) / zoom, vy0 = (vr.top - sr.top) / zoom, vw = vr.width / zoom, vh = vr.height / zoom, m = 0.25;
-  const x0 = Math.max(0, vx0 - vw * m), y0 = Math.max(0, vy0 - vh * m), x1 = Math.min(w, vx0 + vw * (1 + m)), y1 = Math.min(h, vy0 + vh * (1 + m));
-  return x1 > x0 && y1 > y0 ? { x0, y0, w: x1 - x0, h: y1 - y0 } : { x0: 0, y0: 0, w, h }; }
-function placeCanvas() { const g = canvas._reg; if (!g) return; canvas.style.left = g.x0 * zoom + 'px'; canvas.style.top = g.y0 * zoom + 'px'; canvas.style.width = g.w * zoom + 'px'; canvas.style.height = g.h * zoom + 'px'; }
-let renderSeq = 0;
+const renderDpr = () => Math.min(window.devicePixelRatio || 1, isPhoneDev ? 2 : 3); // 2x keeps plan lines crisp with 2.25x fewer pixels than 3x
+const BASE_MAX_PX = isPhoneDev ? 3e6 : 8e6, SHARP = 1.25;
+const base = document.createElement('canvas'); base.id = 'canvasBase'; base.width = base.height = 0; base.setAttribute('aria-hidden', 'true');
+base.style.cssText = 'display:block;position:absolute;left:0;top:0;will-change:transform;pointer-events:none;visibility:hidden';
+canvas.before(base);
+const back = document.createElement('canvas'); back.width = back.height = 0; // the detail is drawn here, then copied to #canvas in one step
+let docSeq = 0, contentGen = 0, baseJob = null, detailJob = null, renderSeq = 0;
+const viewKey = () => doc ? doc.uid + ':' + page + ':' + contentGen : '';
+function fitZoomOf(pg) { const { w, h } = doc.sizes[pg]; return Math.max(0.05, Math.min((vpEl.clientWidth - 40) / w, (vpEl.clientHeight - 40) / h)); }
+// Base resolution: sharp up to about 1.5x the fit zoom, within the pixel budget (on a phone that is 1:1 with the screen at
+// fit, so the first full draw costs what it did before). Past that the detail layer takes over. Images are never drawn above their own size.
+function baseScale() { const { w, h } = doc.sizes[page]; let s = Math.min(Math.sqrt(BASE_MAX_PX / (w * h)), fitZoomOf(page) * renderDpr() * 1.5); if (doc.type === 'image') s = Math.min(s, 1); return s; }
+function detailCap() { const d = renderDpr(); return isPhoneDev ? Math.max(3e6, Math.min(8e6, vpEl.clientWidth * vpEl.clientHeight * d * d * 1.5)) : 16e6; }
+const wantedScale = () => doc.type === 'image' ? Math.min(zoom * renderDpr(), 1) : zoom * renderDpr();
+// Visible part of the page in page units (null when the page is scrolled out of view)
+function visRect() { const { w, h } = doc.sizes[page], vr = vpEl.getBoundingClientRect(), sr = stage.getBoundingClientRect();
+  const x0 = Math.max(0, (vr.left - sr.left) / zoom), y0 = Math.max(0, (vr.top - sr.top) / zoom), x1 = Math.min(w, (vr.right - sr.left) / zoom), y1 = Math.min(h, (vr.bottom - sr.top) / zoom);
+  return x1 > x0 && y1 > y0 ? { x0, y0, w: x1 - x0, h: y1 - y0 } : null; }
+// Detail region and resolution: sharp first, then as much margin (up to 35% a side) as fits under the pixel cap
+function planDetail(vis) { const { w, h } = doc.sizes[page], cap = detailCap(); let r = wantedScale(), m = 0.35, reg;
+  const grow = m => { const x0 = Math.max(0, vis.x0 - vis.w * m), y0 = Math.max(0, vis.y0 - vis.h * m), x1 = Math.min(w, vis.x0 + vis.w * (1 + m)), y1 = Math.min(h, vis.y0 + vis.h * (1 + m)); return { x0, y0, w: x1 - x0, h: y1 - y0 }; };
+  for (;;) { reg = grow(m); if (reg.w * reg.h * r * r <= cap || m <= 0.05) break; m = Math.max(0.05, m - 0.1); }
+  if (reg.w * reg.h * r * r > cap) r = Math.sqrt(cap / (reg.w * reg.h));
+  return { reg, r }; }
+const covers = (g, v) => { const e = 1 / zoom; return g.x0 <= v.x0 + e && g.y0 <= v.y0 + e && g.x0 + g.w >= v.x0 + v.w - e && g.y0 + g.h >= v.y0 + v.h - e; };
+const fits = (st, vis, want) => !!(st && st.reg) && st.key === viewKey() && covers(st.reg, vis) && st.r >= want.r / SHARP && st.r <= want.r * 1.6;
+function placeCanvas() { if (!doc || !doc.sizes[page]) return; const { w, h } = doc.sizes[page], key = viewKey();
+  base.style.width = w * zoom + 'px'; base.style.height = h * zoom + 'px'; base.style.visibility = base._key === key ? '' : 'hidden';
+  const g = canvas._reg; canvas.style.visibility = g && canvas._on && canvas._key === key ? '' : 'hidden'; if (!g) return;
+  canvas.style.left = g.x0 * zoom + 'px'; canvas.style.top = g.y0 * zoom + 'px'; canvas.style.width = g.w * zoom + 'px'; canvas.style.height = g.h * zoom + 'px'; }
+function cancelJob(j) { if (!j) return; j.dead = true; if (j.task) { try { j.task.cancel(); } catch (e) { } j.task = null; } }
+function dropRenders() { cancelJob(baseJob); cancelJob(detailJob); baseJob = detailJob = null; base._key = canvas._key = ''; base._ok = canvas._on = false; canvas._reg = null; canvas.width = canvas.height = base.width = base.height = back.width = back.height = 0; }
+// Draws page region reg at r device px per page unit into ctx (cw x ch). Throws if the job is cancelled.
+async function paintRegion(ctx, cw, ch, reg, r, job) {
+  if (doc.type === 'pdf') { const p = await doc.pdf.getPage(page); if (job.dead) throw new Error('cancelled');
+    job.task = p.render({ canvasContext: ctx, viewport: p.getViewport({ scale: r }), transform: [1, 0, 0, 1, -reg.x0 * r, -reg.y0 * r] }); await job.task.promise; job.task = null; return; }
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
+  if (doc.type === 'cad') CAD.draw(ctx, doc.cad, r, -reg.x0 * r, -reg.y0 * r, (proj && proj.hidden) || {}, reg);
+  else ctx.drawImage(doc.img, reg.x0, reg.y0, reg.w, reg.h, 0, 0, cw, ch);
+  ctx.restore(); }
+// Base: drawn straight into the visible canvas, so the first view of a heavy plan fills in as it draws.
+function renderBase(key) {
+  if (baseJob && baseJob.key === key) return baseJob.promise; // already drawing this page
+  cancelJob(baseJob);
+  const { w, h } = doc.sizes[page], r = baseScale(), cw = Math.max(1, Math.ceil(w * r)), ch = Math.max(1, Math.ceil(h * r)), job = baseJob = { key };
+  job.promise = (async () => {
+    base.width = cw; base.height = ch; base._key = key; base._r = r; base._ok = false; placeCanvas();
+    try { await paintRegion(base.getContext('2d'), cw, ch, { x0: 0, y0: 0, w, h }, r, job); }
+    catch (e) { if (!job.dead) console.error(e); return false; } finally { if (baseJob === job) baseJob = null; }
+    if (job.dead) return false; base._ok = true; return true; })();
+  return job.promise;
+}
+// Detail: drawn into the back buffer, then copied to #canvas, so the current view stays up until the new one is ready.
+function renderDetail(key, vis, want) {
+  if (detailJob && fits(detailJob, vis, want)) return detailJob.promise; // the render in flight already covers this view
+  cancelJob(detailJob);
+  const { reg, r } = want, cw = Math.max(1, Math.ceil(reg.w * r)), ch = Math.max(1, Math.ceil(reg.h * r)), job = detailJob = { key, reg, r };
+  job.promise = (async () => {
+    if (back.width !== cw || back.height !== ch) { back.width = cw; back.height = ch; }
+    try { await paintRegion(back.getContext('2d'), cw, ch, reg, r, job); }
+    catch (e) { if (!job.dead) console.error(e); return false; } finally { if (detailJob === job) detailJob = null; }
+    if (job.dead) return false;
+    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
+    canvas.getContext('2d').drawImage(back, 0, 0); back.width = back.height = 0; // free the buffer now rather than whenever the browser collects it
+    canvas._reg = reg; canvas._r = r; canvas._key = key; canvas._on = true; placeCanvas(); return true; })();
+  return job.promise;
+}
 async function renderCanvas() {
-  if (!doc || !doc.sizes[page]) return; const seq = ++renderSeq, reg = visRegion();
-  let r = zoom * (window.devicePixelRatio || 1); const maxPx = isPhoneDev ? 4e6 : 16e6; // iOS kills tabs that hold big canvases
-  if (reg.w * reg.h * r * r > maxPx) r = Math.sqrt(maxPx / (reg.w * reg.h));
-  const cw = Math.max(1, Math.floor(reg.w * r)), ch = Math.max(1, Math.floor(reg.h * r));
-  const off = document.createElement('canvas'); off.width = cw; off.height = ch; const octx = off.getContext('2d');
-  if (doc.type === 'pdf') {
-    if (renderTask) { try { renderTask.cancel(); } catch (e) { } renderTask = null; }
-    const p = await doc.pdf.getPage(page); const vp = p.getViewport({ scale: r });
-    renderTask = p.render({ canvasContext: octx, viewport: vp, transform: [1, 0, 0, 1, -reg.x0 * r, -reg.y0 * r] });
-    try { await renderTask.promise; } catch (e) { return; } renderTask = null;
-  } else if (doc.type === 'cad') { octx.fillStyle = '#fff'; octx.fillRect(0, 0, cw, ch); CAD.draw(octx, doc.cad, r, -reg.x0 * r, -reg.y0 * r, (proj && proj.hidden) || {}, reg); }
-  else { octx.drawImage(doc.img, reg.x0, reg.y0, reg.w, reg.h, 0, 0, cw, ch); }
-  if (seq !== renderSeq) return; // a newer render started
-  canvas.width = cw; canvas.height = ch; canvas.getContext('2d').drawImage(off, 0, 0); off.width = off.height = 0;
-  canvas._reg = reg; canvas._r = r; placeCanvas();
+  if (!doc || !doc.sizes[page]) return; const seq = ++renderSeq, key = viewKey();
+  if (!(base._key === key && base._ok)) { await renderBase(key); if (seq !== renderSeq || viewKey() !== key || !base._ok) return; }
+  const vis = visRect();
+  if (!vis || wantedScale() <= base._r * SHARP) { cancelJob(detailJob); detailJob = null; if (canvas._reg) { canvas._on = false; canvas._reg = null; canvas.width = canvas.height = 0; placeCanvas(); } } // the base is sharp enough here: drop the detail
+  else { const want = planDetail(vis);
+    if (!(canvas._on && fits({ key: canvas._key, reg: canvas._reg, r: canvas._r }, vis, want))) { const ok = await renderDetail(key, vis, want); if (!ok || seq !== renderSeq) return; } }
   canvas.dataset.rendered = page + ':' + zoom;
 }
+window.PMrender = { get base() { return { key: base._key, ok: !!base._ok, r: base._r, w: base.width, h: base.height }; }, get detail() { return { on: !!canvas._on, key: canvas._key, r: canvas._r, reg: canvas._reg, w: canvas.width, h: canvas.height }; }, get key() { return viewKey(); }, get busy() { return !!(renderQueued || baseJob || detailJob); } };
 let gestureUntil = 0; const gestureBusy = () => performance.now() < gestureUntil || (typeof pointers !== 'undefined' && pointers.size > 1);
-function scheduleRender(ms = 150) { clearTimeout(renderTimer); renderTimer = setTimeout(() => { if (gestureBusy()) return scheduleRender(ms); renderCanvas(); }, ms); }
+let renderQueued = false;
+function scheduleRender(ms = 150) { clearTimeout(renderTimer); renderQueued = true; renderTimer = setTimeout(() => { if (gestureBusy()) return scheduleRender(ms); renderQueued = false; renderCanvas(); }, ms); }
 function el(tag, attrs, parent) { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; }
 function label(g, x, y, text, color) {
   const fs = 13 / zoom; const t = el('text', { x, y, 'font-size': fs, fill: color, 'font-weight': 700, 'text-anchor': 'middle', 'paint-order': 'stroke', stroke: '#fff', 'stroke-width': 3 / zoom, 'pointer-events': 'none' }, g); t.textContent = text; return t;
@@ -137,7 +239,7 @@ function drawItem(it, g, isDraft) {
     const t = el('text', { x, y, 'font-size': fs, fill: c, 'font-weight': 600, 'paint-order': 'stroke', stroke: '#fff', 'stroke-width': 3 / zoom }, grp);
     lines.forEach((ln, i) => { const s = el('tspan', { x, dy: i ? fs * 1.2 : 0 }, t); s.textContent = ln; });
   }
-  if (sel) it.pts.forEach((p, i) => el('rect', { x: p[0] - 6 / zoom, y: p[1] - 6 / zoom, width: 12 / zoom, height: 12 / zoom, fill: '#fff', stroke: '#1976d2', 'stroke-width': 2 / zoom, 'data-v': i, class: 'handle' }, grp));
+  if (sel) it.pts.forEach((p, i) => el('rect', { x: p[0] - 6 / zoom, y: p[1] - 6 / zoom, width: 12 / zoom, height: 12 / zoom, fill: '#fff', stroke: '#1d5fb4', 'stroke-width': 2 / zoom, 'data-v': i, class: 'handle' }, grp));
 }
 function draw() {
   svg.innerHTML = ''; if (!proj) return;
@@ -157,11 +259,16 @@ function groups() {
   return [...m.values()];
 }
 function fmtGroup(g) { const u = proj.units; if (g.type === 'count' || g.type === 'sleeve') return g.n + ' ea'; if (g.type === 'area') return Units.fmtArea(g.sum, u); return Units.fmtLen(g.sum, u); }
+const setHTML = (el, html) => { if (el._html !== html) { el.innerHTML = html; el._html = html; } };
 function renderList() {
   if (!proj) return;
-  $('#totals').innerHTML = '<table class="tot">' + groups().map(g => `<tr><td><span class="sw" style="display:inline-block;background:${g.color}"></span></td><td>${TYPE_NAMES[g.type]}${g.label ? ' - ' + esc(g.label) : ''}</td><td><b>${fmtGroup(g)}</b>${g.noscale ? ' *' : ''}</td></tr>`).join('') + '</table>' + (groups().some(g => g.noscale) ? '<small>* some items on pages without scale</small>' : '');
-  const only = $('#pageOnly').checked;
-  $('#list').innerHTML = proj.items.filter(i => !only || i.page === page).map(i => `<div class="row ${i.id === selId ? 'sel' : ''}" data-id="${i.id}"><span class="sw" style="background:${i.color}"></span>p${i.page} ${TYPE_NAMES[i.type]} ${esc(i.type === 'text' ? (i.text || '').slice(0, 20) : i.label || '')}<span class="v">${fmtItem(i)}</span></div>`).join('') || '<small>No items yet.</small>';
+  const gs = groups();
+  setHTML($('#totals'), gs.length ? '<table class="tot">' + gs.map(g => `<tr><td class="swc"><span class="sw" style="background:${esc(g.color)}"></span></td><td class="nm">${TYPE_NAMES[g.type]}${g.label ? '<small>' + esc(g.label) + '</small>' : ''}</td><td class="n">${fmtGroup(g)}${g.noscale ? '<sup>*</sup>' : ''}</td></tr>`).join('') + '</table>' + (gs.some(g => g.noscale) ? '<small class="totnote">* Some items are on pages without a scale.</small>' : '') : '<p class="empty">Nothing measured yet. Pick a tool and click on the plan.</p>');
+  const only = $('#pageOnly').checked, sN = new Map(), u = proj.units; let k = 0; for (const o of proj.items) if (o.type === 'sleeve') sN.set(o, ++k);
+  const val = i => { const v = measure(i); if (i.type === 'count' || i.type === 'text') return ''; if (i.type === 'sleeve') return i.size || ''; if (!isFinite(v)) return 'no scale'; return i.type === 'area' ? Units.fmtArea(v, u) : Units.fmtLen(v, u); };
+  const det = i => { const d = [], sc = scaleOf(i.page); if (!only) d.push('Page ' + i.page); if (i.type === 'area' && sc) d.push('perimeter ' + Units.fmtLen(polyLen(i.pts, true) * sc, u)); if (i.type === 'sleeve') d.push(sleeveText(i)); if ((i.type === 'line' || i.type === 'poly') && i.extra) d.push('includes ' + Units.fmtLen(i.extra, u) + ' added'); if (i.type === 'text') d.push((i.text || '').replace(/\s+/g, ' ')); const t = d.filter(Boolean).join(', '); return t.charAt(0).toUpperCase() + t.slice(1); };
+  setHTML($('#list'), proj.items.filter(i => !only || i.page === page).map(i => { const nm = i.type === 'sleeve' ? ['S' + sN.get(i), i.label].filter(Boolean).join(' ') : i.type === 'text' ? '' : i.label || '', v = val(i), d = det(i);
+    return `<div class="row ${i.id === selId ? 'sel' : ''}" data-id="${i.id}"><span class="sw" style="background:${esc(i.color)}"></span><span class="nm"><span class="l1">${TYPE_NAMES[i.type]}${nm ? '<small>' + esc(nm) + '</small>' : ''}</span>${d ? '<span class="l2">' + esc(d) + '</span>' : ''}</span><span class="v${v === 'no scale' ? ' ns' : ''}">${esc(v)}</span><button type="button" class="rdel" title="Delete" aria-label="Delete">${svgIc('trash')}</button></div>`; }).join('') || `<p class="empty">${only && proj.items.length ? 'Nothing on this page yet.' : 'No items yet.'}</p>`);
   const it = proj.items.find(i => i.id === selId); $('#edit').hidden = !it;
   if (it) { $('#eLabel').value = it.label || ''; $('#eColor').value = it.color; $('#eTextRow').hidden = it.type !== 'text'; $('#eText').value = it.text || '';
     $('#eDropRow').hidden = !(it.type === 'line' || it.type === 'poly'); if (document.activeElement !== $('#eExtra')) $('#eExtra').value = it.extra ? Units.fmtLen(it.extra, proj.units) : ''; }
@@ -179,8 +286,10 @@ function deleteSel() { if (!selId) return; const it = selItem(); deleteItems([se
 function changed() { draw(); persistSoon(); commitSoon(); }
 
 // ---------- navigation & zoom ----------
-function gotoPage(n) { if (!doc) return; n = Math.max(1, Math.min(doc.numPages, n)); if (n !== page) { page = n; draft = null; } fitPage(); }
-function fitPage() { if (!doc) return; const { w, h } = doc.sizes[page]; zoom = Math.max(0.05, Math.min((vpEl.clientWidth - 40) / w, (vpEl.clientHeight - 40) / h)); layout(); }
+function gotoPage(n) { if (!doc) return; n = Math.max(1, Math.min(doc.numPages, n)); if (n !== page) { const old = page; page = n; draft = null; const it = proj && proj.items.find(i => i.id === selId); if (it && it.page !== n) selId = null; if (isPhoneDev) releasePage(old); } fitPage(); }
+// Phones: free the page you left (its parsed drawing and decoded images). It is parsed again if you come back.
+function releasePage(pg) { if (doc && doc.type === 'pdf') doc.pdf.getPage(pg).then(p => p.cleanup()).catch(() => { }); }
+function fitPage() { if (!doc) return; document.body.classList.toggle('hasdoc', true); const { w, h } = doc.sizes[page]; zoom = Math.max(0.05, Math.min((vpEl.clientWidth - 40) / w, (vpEl.clientHeight - 40) / h)); layout(); }
 function setZoom(z, cx, cy) {
   if (!doc) return; z = Math.max(0.05, Math.min(20, z)); const r = vpEl.getBoundingClientRect();
   if (cx == null) { cx = r.left + r.width / 2; cy = r.top + r.height / 2; }
@@ -206,6 +315,8 @@ const HINTS = {
   sleeve: 'Click to place a sleeve. Choose the size first. Offsets to the nearest lines and X/Y from the origin are shown.',
   origin: 'Click a gridline intersection or corner to set the 0,0 origin for sleeve coordinates.'
 };
+function syncToolUI() { const a = document.querySelector('.tool.active'); document.querySelectorAll('#tools [data-tool],#zoneTool').forEach(b => b.setAttribute('aria-pressed', String(b.classList.contains('active'))));
+  if (a) { const ic = a.querySelector('svg'), t = a.querySelector('.t'), o = $('#optTool'); if (o._for !== a) { o.querySelector('svg').innerHTML = ic ? ic.innerHTML : ''; o.querySelector('span').textContent = t ? t.textContent : ''; o._for = a; } } }
 function setTool(t) { tool = t; draft = null; hover = null; document.querySelectorAll('.tool').forEach(b => b.classList.toggle('active', b.dataset.tool === t)); $('#hint').textContent = HINTS[t]; vpEl.style.cursor = t === 'pan' ? 'grab' : t === 'select' ? 'default' : 'crosshair'; draw(); }
 document.querySelectorAll('.tool').forEach(b => b.onclick = () => setTool(b.dataset.tool));
 function pagePt(e) { const r = svg.getBoundingClientRect(); return [(e.clientX - r.left) / zoom, (e.clientY - r.top) / zoom]; }
@@ -236,11 +347,11 @@ function clickAt(p, e) {
   } else if (tool === 'count') { p = aim(p, e, null); proj.items.push({ id: uid(), type: 'count', page, pts: [p], color, label: lab }); changed(); }
   else if (tool === 'sleeve') { p = aim(p, e, null); proj.items.push({ id: uid(), type: 'sleeve', page, pts: [p], color, label: lab, size: $('#sleeveSize').value, text: '' }); changed(); }
   else if (tool === 'origin') { p = aim(p, e, null); proj.origins = proj.origins || {}; proj.origins[page] = p; changed(); toast('Origin set. Sleeve X/Y are measured from here (Y up).'); }
-  else if (tool === 'text') { const t = prompt('Note text:'); if (t) { proj.items.push({ id: uid(), type: 'text', page, pts: [p], color, label: '', text: t }); changed(); } }
+  else if (tool === 'text') { const pg = page; ask({ title: 'Add a note', kind: 'note', placeholder: 'e.g. Verify invert with site', ok: 'Add note' }).then(t => { t = (t || '').trim(); if (t && proj) { proj.items.push({ id: uid(), type: 'text', page: pg, pts: [p], color, label: '', text: t }); changed(); } }); }
 }
 
 // pointer handling: click / drag / pan / pinch
-const pointers = new Map(); let gesture = null;
+const pointers = new Map(); let gesture = null, lastUp = null;
 vpEl.addEventListener('pointerdown', e => {
   if (!doc) return; try { vpEl.setPointerCapture(e.pointerId); } catch (err) { } pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (pointers.size === 2) { const [a, b] = [...pointers.values()]; gesture = { kind: 'pinch', d: Math.hypot(a.x - b.x, a.y - b.y), z: zoom, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 }; hideLoupe(); return; }
@@ -248,6 +359,7 @@ vpEl.addEventListener('pointerdown', e => {
   gesture = { kind: 'maybe', sx: e.clientX, sy: e.clientY, sl: vpEl.scrollLeft, st: vpEl.scrollTop, p, moved: false };
   // Print mode: pan/pinch the view only (the blue frame handles its own drag/resize)
   if (document.body.classList.contains('printmode')) { gesture.kind = 'pan'; return; }
+  if (e.button === 0 && draft && (draft.type === 'poly' || draft.type === 'area') && lastUp && performance.now() - lastUp.t < 450 && Math.hypot(e.clientX - lastUp.x, e.clientY - lastUp.y) < 8) { lastUp = null; gesture = null; finishDraft(); return; }
   if (e.button === 1 || tool === 'pan') { gesture.kind = 'pan'; return; }
   if (draft && PLACE.includes(tool)) { const k = draft.pts.findIndex(q => dist(q, p) * zoom < (e.pointerType === 'touch' ? 22 : 10)); if (k >= 0 && (draft.type === 'calibrate' ? draft.pts.length === 2 : true)) { gesture.kind = 'dpt'; gesture.v = k; calSel = k; gesture.off = [draft.pts[k][0] - p[0], draft.pts[k][1] - p[1]]; showLoupe(draft.pts[k], e); draw(); return; } }
   if (e.pointerType !== 'mouse' && PLACE.includes(tool) && !(tool === 'calibrate' && draft && draft.pts.length === 2)) { gesture.kind = 'place'; hover = placeSnap(p, e); showLoupe(hover, e); draw(); return; }
@@ -285,14 +397,15 @@ function endPointer(e) {
   if (g.kind === 'dpt') { if (e.pointerType !== 'mouse') hideLoupe(); draw(); return; }
   if (g.kind === 'vertex' || g.kind === 'move') { changed(); return; }
   if (g.kind === 'pan') { if (g.desel && !g.moved) { selId = null; draw(); } return; }
-  if (g.kind === 'maybe' && !g.moved && e.type === 'pointerup') clickAt(pagePt(e), e);
+  if (g.kind === 'maybe' && !g.moved && e.type === 'pointerup') { clickAt(pagePt(e), e); lastUp = { t: performance.now(), x: e.clientX, y: e.clientY }; }
 }
 vpEl.addEventListener('pointerup', endPointer); vpEl.addEventListener('pointercancel', endPointer);
 vpEl.addEventListener('dblclick', e => { if (draft && (draft.type === 'poly' || draft.type === 'area')) { // remove the duplicate point added by the 2nd click
   if (draft.pts.length > 1 && dist(draft.pts[draft.pts.length - 1], draft.pts[draft.pts.length - 2]) < 4 / zoom) draft.pts.pop(); finishDraft(); } });
 document.addEventListener('keydown', e => {
   if (e.key === 'Shift') shiftDown = true;
-  if (e.target.matches('input:not([type=checkbox]),textarea,select')) return;
+  if (e.target.matches('input:not([type=checkbox]),textarea,select') || document.querySelector('dialog[open]')) return;
+  if (e.key === '?') { $('#keysDlg').showModal(); return; }
   if (e.key.startsWith('Arrow') && draft && draft.pts.length) { e.preventDefault(); const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key]; nudge(d[0], d[1]); return; }
   if (e.key.toLowerCase() === 'm' && !e.ctrlKey && !e.metaKey) { toggleLoupe(); return; }
   if (e.key === 'Tab' && draft && draft.pts.length > 1) { e.preventDefault(); calSel = (calSel + 1) % draft.pts.length; draw(); return; }
@@ -310,7 +423,8 @@ document.addEventListener('keyup', e => { if (e.key === 'Shift') shiftDown = fal
 Units.STD.forEach((s, i) => { const o = document.createElement('option'); o.value = i; o.textContent = s.name; $('#stdScale').appendChild(o); });
 $('#stdScale').value = Units.STD.findIndex(s => s.ratio === 48);
 function applyScale(mPerUnit, name, all) { const pgs = all ? Array.from({ length: doc.numPages }, (_, i) => i + 1) : [page]; proj.scaleNames = proj.scaleNames || {}; pgs.forEach(p => { proj.scales[p] = mPerUnit; proj.scaleNames[p] = name; }); layout(); persistSoon(); commitHist(); toast('Scale set: ' + name); }
-$('#scaleBtn').onclick = () => { if (!doc) return toast('Open a plan first'); $('#imgDpiRow').hidden = doc.type !== 'image'; $('#cadUnitRow').hidden = doc.type !== 'cad'; $('#stdScale').hidden = doc.type === 'cad'; $('#scaleDlg').showModal(); };
+$('#scaleBtn').onclick = () => { if (!doc) return toast('Open a plan first'); $('#imgDpiRow').hidden = doc.type !== 'image'; $('#cadUnitRow').hidden = doc.type !== 'cad'; $('#stdScaleRow').hidden = doc.type === 'cad'; $('#calInstead').hidden = doc.type === 'cad'; $('#scaleDlg').showModal(); };
+$('#calInstead').onclick = () => { $('#scaleDlg').close('cancel'); setTool('calibrate'); toast('Click two points of a known distance on the plan.', 4000); };
 $('#scaleDlg').addEventListener('close', () => { if ($('#scaleDlg').returnValue !== 'ok') return; if (doc.type === 'cad') { const u = +$('#cadUnit').value; return applyScale(CAD.UNIT_M[u] / doc.cad.k, 'CAD units: ' + CAD.UNIT_NAME[u], false); }
   const s = Units.STD[$('#stdScale').value];
   let m = s.mPerPt; if (doc.type === 'image') m = s.ratio * Units.IN / (+$('#imgDpi').value || 150); applyScale(m, s.name, $('#allPages').checked); });
@@ -343,10 +457,10 @@ function buildCSV() {
   proj.items.forEach(it => { const v = measure(it); let q = '', un = '';
     if (it.type === 'line' || it.type === 'poly') { q = isFinite(v) ? (v * lf).toFixed(3) : ''; un = lu; }
     else if (it.type === 'area') { q = isFinite(v) ? (v * af).toFixed(3) : ''; un = au; }
-    else if (it.type === 'count') { q = 1; un = 'ea'; }
+    else if (it.type === 'count' || it.type === 'sleeve') { q = 1; un = 'ea'; }
     rows.push([it.page, TYPE_NAMES[it.type], it.label || '', it.color, q, un, fmtItem(it), it.extra ? Units.fmtLen(it.extra, u) : '', it.text || '']); });
   rows.push([], ['TOTALS'], ['Type', 'Label', 'Colour', 'Quantity', 'Unit', 'Display', 'Items']);
-  groups().forEach(g => rows.push([TYPE_NAMES[g.type], g.label, g.color, g.type === 'count' ? g.n : g.type === 'area' ? (g.sum * af).toFixed(3) : (g.sum * lf).toFixed(3), g.type === 'count' ? 'ea' : g.type === 'area' ? au : lu, fmtGroup(g), g.n]));
+  groups().forEach(g => { const ea = g.type === 'count' || g.type === 'sleeve'; rows.push([TYPE_NAMES[g.type], g.label, g.color, ea ? g.n : g.type === 'area' ? (g.sum * af).toFixed(3) : (g.sum * lf).toFixed(3), ea ? 'ea' : g.type === 'area' ? au : lu, fmtGroup(g), g.n]); });
   return rows.map(r => r.map(csvCell).join(',')).join('\r\n');
 }
 function download(data, name, type) { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([data], { type })); a.download = name; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000); }
@@ -404,10 +518,10 @@ $('#pdfBtn').onclick = async () => { if (!proj) return; toast('Building PDF...')
 let dbp = null;
 function db() { return dbp || (dbp = new Promise((res, rej) => { const r = indexedDB.open('plan-measure', 1); r.onupgradeneeded = () => r.result.createObjectStore('projects', { keyPath: 'id' }); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); })); }
 async function idb(mode, fn) { const d = await db(); return new Promise((res, rej) => { const tx = d.transaction('projects', mode); const r = fn(tx.objectStore('projects')); tx.oncomplete = () => res(r && r.result); tx.onerror = () => rej(tx.error); }); }
-let saveTimer; function persistSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(persist, 800); }
+let saveTimer; function persistSoon() { clearTimeout(saveTimer); setSaveState('pending'); saveTimer = setTimeout(persist, 800); }
 function packForSave(M) { const o = {}; for (const k in M) if (k[0] !== '_' && typeof M[k] !== 'function') o[k] = M[k]; return o; }
-async function persist() { if (!proj || !doc) return; try { await idb('readwrite', s => s.put({ ...JSON.parse(JSON.stringify(proj)), ...(doc.type === 'cad' ? { bytes: null, cadPack: packForSave(doc.cad) } : { bytes: doc.bytes }), updated: Date.now() })); localStorage.setItem('pm-last', proj.id); } catch (e) { toast('Could not save: ' + e.message); } }
-$('#saveBtn').onclick = async () => { if (!proj) return; const n = prompt('Project name:', proj.name); if (n) { proj.name = n; await persist(); toast('Saved in this browser'); } };
+async function persist() { if (!proj || !doc) return; try { const t = Date.now(); await idb('readwrite', s => s.put({ ...JSON.parse(JSON.stringify(proj)), ...(doc.type === 'cad' ? { bytes: null, cadPack: packForSave(doc.cad) } : { bytes: doc.bytes }), updated: t })); localStorage.setItem('pm-last', proj.id); rememberRecent(proj, t); setSaveState('ok', '', t); } catch (e) { setSaveState('err', e.message); toast('Could not save: ' + e.message); } }
+$('#saveBtn').onclick = async () => { if (!proj) return; const n = await ask({ title: 'Save project', message: 'Projects are saved in this browser automatically. Give this one a name you will recognise.', kind: 'text', value: proj.name, ok: 'Save' }); if (n != null && n.trim()) { proj.name = n.trim(); layout(); await persist(); toast('Saved in this browser'); } };
 // One-shot: older projects defaulted to feet/metres; move them to mm unless already migrated.
 // After this, Units picker choices stick via unitsMigratedMm.
 function migrateProjectUnits(p) {
@@ -415,53 +529,46 @@ function migrateProjectUnits(p) {
   if (p.units !== 'mm' && p.units !== 'met' && p.units !== 'imp') p.units = Units.DEFAULT_UNITS;
   if (!p.unitsMigratedMm) { p.units = Units.DEFAULT_UNITS; p.unitsMigratedMm = true; }
 }
-async function openProject(id) { const r = await idb('readonly', s => s.get(id)); if (!r) return; const { bytes, cadPack, updated, ...p } = r; await loadDoc(cadPack ? { cadPack } : new Uint8Array(bytes), p.fileType, p.fileName); proj = p; migrateProjectUnits(proj); resetHist(); $('#units').value = proj.units; if ($('#units2')) $('#units2').value = proj.units; page = 1; selId = null; draft = null; fitPage(); localStorage.setItem('pm-last', id); }
-$('#projBtn').onclick = async () => { const all = await idb('readonly', s => s.getAll()); all.sort((a, b) => b.updated - a.updated);
-  $('#projList').innerHTML = all.map(p => `<div class="proj"><span>${esc(p.name)}<br><small>${new Date(p.updated).toLocaleString()} - ${p.items.length} items</small></span><button type="button" class="btn" data-open="${p.id}">Open</button><button type="button" class="btn danger" data-del="${p.id}">Delete</button></div>`).join('') || 'No saved projects.';
-  $('#projDlg').showModal(); };
-$('#projList').addEventListener('click', async e => { const o = e.target.dataset.open, d = e.target.dataset.del;
-  if (o) { $('#projDlg').close(); await openProject(o); } if (d && confirm('Delete this project?')) { await idb('readwrite', s => s.delete(d)); $('#projDlg').close(); $('#projBtn').click(); } });
+async function openProject(id) { const r = await idb('readonly', s => s.get(id)); if (!r) { forgetRecent(id); renderRecent(); throw new Error('it is no longer saved in this browser'); } const { bytes, cadPack, updated, ...p } = r; setSaveState('ok', '', updated); await loadDoc(cadPack ? { cadPack } : ownBytes(bytes), p.fileType, p.fileName); proj = p; migrateProjectUnits(proj); resetHist(); $('#units').value = proj.units; if ($('#units2')) $('#units2').value = proj.units; page = 1; selId = null; draft = null; fitPage(); localStorage.setItem('pm-last', id); }
+$('#projBtn').onclick = async () => { closeMoreMenu(); const all = await idb('readonly', s => s.getAll()); all.sort((a, b) => b.updated - a.updated); syncRecentFrom(all);
+  $('#projList').innerHTML = all.map(p => `<div class="proj"><div class="pinfo"><b>${esc(p.name)}</b><small>${esc(fmtWhen(p.updated))}, ${p.items.length} item${p.items.length === 1 ? '' : 's'}${p.fileName ? ', ' + esc(p.fileName) : ''}</small></div><button type="button" class="btn small" data-open="${esc(p.id)}">Open</button><button type="button" class="btn danger small" data-del="${esc(p.id)}" title="Delete project" aria-label="Delete ${esc(p.name)}">${svgIc('trash')}</button></div>`).join('') || '<p class="proj-empty">No saved projects yet. Open a plan and it is saved here automatically.</p>';
+  if (!$('#projDlg').open) $('#projDlg').showModal(); };
+$('#projList').addEventListener('click', async e => { const ob = e.target.closest('[data-open]'), delB = e.target.closest('[data-del]');
+  if (ob) { $('#projDlg').close(); await openGuarded(ob.dataset.open); }
+  if (delB) { const id = delB.dataset.del, name = delB.closest('.proj').querySelector('b').textContent;
+    if (await ask({ title: 'Delete this project?', message: '"' + name + '" and its markups will be removed from this browser. This cannot be undone.', ok: 'Delete project', danger: true })) { await idb('readwrite', s => s.delete(id)); forgetRecent(id); renderRecent(); $('#projBtn').click(); } } });
 
-setTool('select'); $('#hint').textContent = 'Open a PDF or image plan to start. Your work is saved automatically in this browser.';
+setTool('select');
 // Start-up: never auto-open big or CAD projects (parsing a large DWG blocks the page on phones for a long time and looked like a frozen app).
 // Small projects reopen automatically unless the previous attempt did not finish (crash guard); otherwise offer a Continue button.
-(async () => { const last = localStorage.getItem('pm-last'); if (!last) return; let r = null; try { r = await idb('readonly', s => s.get(last)); } catch (e) { } if (!r) return;
+(async () => { const last = localStorage.getItem('pm-last'); renderRecent(); if (!last) return; let r = null; try { r = await idb('readonly', s => s.get(last)); } catch (e) { } if (!r) { forgetRecent(last); renderRecent(); return; }
+  if (!recentList().some(x => x.id === r.id)) rememberRecent(r, r.updated);
   const size = r.bytes ? (r.bytes.byteLength || r.bytes.length || 0) : 0, heavy = r.fileType === 'cad' || /\.(dwg|dxf)$/i.test(r.fileName || '') || size > 8e6, crashed = localStorage.getItem('pm-opening') === last;
-  const btn = $('#resumeBtn'); if (btn) { btn.hidden = false; btn.textContent = 'Continue ' + (r.name || r.fileName || 'last project'); btn.onclick = () => openGuarded(last); }
-  void heavy; void crashed; /* never auto-reopen: the user taps Continue */ })();
-async function openGuarded(id) { localStorage.setItem('pm-opening', id); toast('Opening...', 60000); await new Promise(r => setTimeout(r, 50)); try { await openProject(id); toast('Opened'); } catch (e) { toast('Could not open the project: ' + e.message, 5000); } finally { localStorage.removeItem('pm-opening'); } }
+  const btn = $('#resumeBtn'); if (btn) { btn.hidden = false; const lab = 'Continue ' + (r.name || r.fileName || 'last project'), t = btn.querySelector('.t'); if (t) t.textContent = lab; else btn.textContent = lab; btn.title = lab; btn.onclick = () => openGuarded(last); }
+  renderRecent(); void heavy; void crashed; /* never auto-reopen: the user taps Continue */ })();
+async function openGuarded(id) { localStorage.setItem('pm-opening', id); toast('Opening...', 60000); await new Promise(r => setTimeout(r, 50)); try { await openProject(id); toast('Opened ' + (proj && proj.name || 'project')); } catch (e) { toast('Could not open the project: ' + e.message, 5000); } finally { localStorage.removeItem('pm-opening'); } }
 // test hook
 window.PM = { undo: () => undo(), redo: () => redo(), get hist() { return { u: H.u.length, r: H.r.length }; }, get draft() { return draft; }, get proj() { return proj; }, get doc() { return doc; }, measure, buildCSV, buildPDF, setTool, gotoPage, applyScale, get zoom() { return zoom; } };
 $('#calVal').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#calDlg').close('ok'); } });
-// ---- icons (inline SVG, no external assets) ----
-const ICONS = {
- open:'<path d="M3 7h6l2 2h10v10H3z"/>', save:'<path d="M5 3h12l3 3v15H4V3z"/><path d="M8 3v6h8V3M8 21v-7h8v7"/>', folder:'<path d="M3 6h6l2 2h10v11H3z"/><path d="M3 11h18"/>',
- left:'<path d="M15 5l-7 7 7 7"/>', right:'<path d="M9 5l7 7-7 7"/>', minus:'<path d="M5 12h14"/>', plus:'<path d="M5 12h14M12 5v14"/>',
- fit:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>', ruler:'<path d="M3 16L16 3l5 5L8 21z"/><path d="M7 12l2 2M10 9l2 2M13 6l2 2"/>',
- table:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M3 15h18M9 4v16"/>', download:'<path d="M12 3v12M7 10l5 5 5-5M4 20h16"/>', print:'<path d="M6 9V3h12v6M6 17H4a2 2 0 01-2-2v-4a2 2 0 012-2h16a2 2 0 012 2v4a2 2 0 01-2 2h-2"/><rect x="6" y="13" width="12" height="8"/>',
- panel:'<rect x="3" y="4" width="18" height="16" rx="1"/><path d="M15 4v16"/>', close:'<path d="M6 6l12 12M18 6L6 18"/>',
- undo:'<path d="M9 14L4 9l5-5"/><path d="M4 9h10a6 6 0 010 12h-4"/>', redo:'<path d="M15 14l5-5-5-5"/><path d="M20 9H10a6 6 0 000 12h4"/>', snap:'<rect x="8" y="8" width="8" height="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>', sleeve:'<circle cx="12" cy="12" r="7"/><path d="M5 12h14M12 5v14"/>', origin:'<path d="M4 20V4M4 20h16"/><circle cx="4" cy="20" r="2"/>', layers:'<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>', find:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20"/><circle cx="10" cy="10" r="2"/>', select:'<path d="M5 3l14 8-6 2-2 6z"/>', loupe:'<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>', up:'<path d="M5 15l7-7 7 7"/>', down:'<path d="M5 9l7 7 7-7"/>', more:'<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>', hand:'<path d="M8 13V5a1.5 1.5 0 013 0v6M11 11V4a1.5 1.5 0 013 0v7M14 11V6a1.5 1.5 0 013 0v8c0 4-3 7-7 7s-6-3-7-6l-1-3a1.5 1.5 0 012.5-1.5L8 13"/>',
- cal:'<path d="M4 20L20 4"/><circle cx="4" cy="20" r="2"/><circle cx="20" cy="4" r="2"/><path d="M9 9l-2-2M15 15l2 2"/>', line:'<path d="M4 18L20 6"/><path d="M4 14v8M20 2v8"/>',
- poly:'<path d="M3 19h6V9h6v6h6"/><circle cx="3" cy="19" r="1.5"/><circle cx="21" cy="15" r="1.5"/>', area:'<path d="M4 6l12-2 4 10-8 6-8-4z" fill="currentColor" fill-opacity=".25"/>',
- count:'<circle cx="7" cy="8" r="3"/><circle cx="17" cy="8" r="3"/><circle cx="12" cy="17" r="3"/>', text:'<path d="M5 5h14M12 5v14M9 19h6"/>'
-};
+// ---- icons: inject the inline SVG named by data-icon, wrap the label in .t ----
 document.querySelectorAll('[data-icon]').forEach(b => { const txt = [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
   [...b.childNodes].filter(n => n.nodeType === 3).forEach(n => n.remove());
-  b.insertAdjacentHTML('afterbegin', `<svg class="ic" viewBox="0 0 24 24">${ICONS[b.dataset.icon]}</svg>` + (txt ? `<span class="t">${txt}</span>` : '')); });
-function togglePanel(force) { document.body.classList.toggle('noside', force); localStorage.setItem('pm-noside', document.body.classList.contains('noside') ? 1 : ''); if (doc) fitPage(); }
+  b.insertAdjacentHTML('afterbegin', svgIc(b.dataset.icon) + (txt ? `<span class="t">${esc(txt)}</span>` : '')); });
+// icon-only buttons get their accessible name from the tooltip
+document.querySelectorAll('button[title]').forEach(b => { if (!b.querySelector('.t') && !b.textContent.trim() && !b.hasAttribute('aria-label')) b.setAttribute('aria-label', b.title.replace(/\s*\(.*\)$/, '')); });
+function togglePanel(force) { document.body.classList.toggle('noside', force); localStorage.setItem('pm-noside', document.body.classList.contains('noside') ? 1 : ''); $('#panelBtn').setAttribute('aria-pressed', String(!document.body.classList.contains('noside'))); if (doc) fitPage(); }
 $('#panelBtn').onclick = () => togglePanel(); $('#panelClose').onclick = () => togglePanel(true);
-if (localStorage.getItem('pm-noside')) document.body.classList.add('noside');
+if (localStorage.getItem('pm-noside')) document.body.classList.add('noside'); $('#panelBtn').setAttribute('aria-pressed', String(!document.body.classList.contains('noside')));
 // ---- phone layout ----
-ICONS.more = '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>'; $('#moreBtn svg').innerHTML = ICONS.more;
-document.querySelectorAll('#moreBtn,#moreMenu [data-icon],#cancelBtn,#printGo,#printRecenterBtn,#ppBack,#ppPrint,#ppSave').forEach(b => { if (b.querySelector('svg')) return; const txt = b.textContent.trim(); b.textContent = '';
-  b.insertAdjacentHTML('afterbegin', `<svg class="ic" viewBox="0 0 24 24">${ICONS[b.dataset.icon] || ''}</svg><span class="t">${txt}</span>`); });
 $('#file2').addEventListener('change', onFile);
 const phoneMQ = matchMedia('(max-width: 700px)');
 const drawEls = ['.opt:nth-of-type(1)', '.opt:nth-of-type(2)'];
+// Phone: tool options sit in the bar above the tools, sheet/scale controls in the top bar.
+// Desktop: options in the bar above the plan, sheet/zoom/scale/units in the status strip below it.
 function placeDrawControls() {
-  const opts = [...document.querySelectorAll('.opt')], fin = $('#finishBtn'), und = $('#undoPt');
-  if (phoneMQ.matches) { [...opts, und, fin].forEach(n => $('#drawSlot').appendChild(n)); }
-  else { const hint = $('#hint'); [...opts, fin, und].forEach(n => $('#tools').insertBefore(n, hint)); }
+  const opts = [...document.querySelectorAll('.opt')], fin = $('#finishBtn'), und = $('#undoPt'), view = $('#viewCtl');
+  if (phoneMQ.matches) { opts.forEach(n => $('#drawSlot').appendChild(n)); [und, fin, $('#calSetBtn')].forEach(n => $('#drawEnd').appendChild(n)); $('#bar').insertBefore(view, $('#moreBtn')); }
+  else { opts.forEach(n => $('#optOpts').appendChild(n)); [und, fin].forEach(n => $('#optEnd').appendChild(n)); $('.opt.calbar').appendChild($('#calSetBtn')); $('#status').insertBefore(view, $('#status').firstChild); }
   updateDrawBar(); if (doc) fitPage();
 }
 function updateDrawBar() {
@@ -470,12 +577,13 @@ function updateDrawBar() {
   document.body.classList.toggle('multi', tool === 'poly' || tool === 'area');
   document.body.classList.toggle('hasdraft', !!draft);
   document.body.classList.toggle('cal', tool === 'calibrate');
+  document.body.dataset.tool = tool; syncToolUI();
 }
 phoneMQ.addEventListener('change', placeDrawControls);
 const _draw = draw; draw = function () { _draw(); updateDrawBar(); updateSheet(); };
 $('#cancelBtn').onclick = () => { if (draft) { draft = null; hover = null; draw(); } else setTool('select'); };
-function closeMoreMenu() { $('#moreMenu').hidden = true; $('#moreBackdrop').hidden = true; document.body.classList.remove('menuopen'); }
-function openMoreMenu() { $('#redoMenu').disabled = $('#redoBtn').disabled; $('#units2').value = $('#units').value; $('#moreMenu').hidden = false; $('#moreBackdrop').hidden = false; document.body.classList.add('menuopen'); $('#moreMenu .mscroll').scrollTop = 0; }
+function closeMoreMenu() { $('#moreMenu').hidden = true; $('#moreBackdrop').hidden = true; document.body.classList.remove('menuopen'); $('#moreBtn').setAttribute('aria-expanded', 'false'); }
+function openMoreMenu() { closeExportMenu(); $('#redoMenu').disabled = $('#redoBtn').disabled; $('#units2').value = $('#units').value; $('#moreMenu').hidden = false; $('#moreBackdrop').hidden = false; document.body.classList.add('menuopen'); $('#moreMenu .mscroll').scrollTop = 0; $('#moreBtn').setAttribute('aria-expanded', 'true'); }
 $('#moreBtn').onclick = e => { e.stopPropagation(); if ($('#moreMenu').hidden) openMoreMenu(); else closeMoreMenu(); };
 $('#moreBackdrop').onclick = () => closeMoreMenu();
 document.addEventListener('click', e => { if (!$('#moreMenu').hidden && !e.target.closest('#moreMenu,#moreBtn,#moreBackdrop')) closeMoreMenu(); });
@@ -486,20 +594,17 @@ $('#units2').addEventListener('change', e => { $('#units').value = e.target.valu
 $('#scaleInfo').onclick = () => $('#scaleBtn').click();
 $('#sheetHandle').onclick = () => { document.body.classList.toggle('sheetopen'); updateSheet(); placeSelBar(); };
 function updateSheet() { if (!proj) return; const g = groups(); $('#units2').value = proj.units;
-  $('#sheetSum').textContent = g.length ? g.slice(0, 3).map(x => (x.label || TYPE_NAMES[x.type]) + ' ' + fmtGroup(x)).join('  |  ') + (g.length > 3 ? '  ...' : '') : 'Takeoff: no items yet';
+  $('#sheetSum').textContent = g.length ? g.slice(0, 3).map(x => (x.label || TYPE_NAMES[x.type]) + ' ' + fmtGroup(x)).join(', ') + (g.length > 3 ? ' and ' + (g.length - 3) + ' more' : '') : 'Takeoff: nothing measured yet';
   $('.chev').textContent = document.body.classList.contains('sheetopen') ? 'Hide' : 'Show'; }
 document.addEventListener('gesturestart', e => e.preventDefault());
 placeDrawControls(); layout();
 // ---- magnifier loupe + nudge ----
-ICONS.loupe = '<circle cx="10" cy="10" r="6"/><path d="M14.5 14.5L20 20M10 7v6M7 10h6"/>';
-ICONS.up = '<path d="M5 15l7-7 7 7"/>'; ICONS.down = '<path d="M5 9l7 7 7-7"/>';
-document.querySelectorAll('#loupeBtn,.nud').forEach(b => { if (b.querySelector('svg')) return; const txt = b.textContent.trim(); b.textContent = ''; b.insertAdjacentHTML('afterbegin', `<svg class="ic" viewBox="0 0 24 24">${ICONS[b.dataset.icon]}</svg>` + (txt ? `<span class="t">${txt}</span>` : '')); });
 const PLACE = ['calibrate', 'line', 'poly', 'area'];
 let calSel = 0, loupeOn = localStorage.getItem('pm-loupe') !== '0', loupeTask = null, loupeBusy = false, loupeWant = null;
 const LSZ = 140, lc = $('#loupe');
 function placeSnap(p, e) { return aim(p, e, draft && draft.pts.length ? draft.pts[draft.pts.length - 1] : null); }
-function toggleLoupe() { loupeOn = !loupeOn; localStorage.setItem('pm-loupe', loupeOn ? '1' : '0'); $('#loupeBtn').classList.toggle('on', loupeOn); if (!loupeOn) hideLoupe(); toast('Magnifier ' + (loupeOn ? 'on' : 'off')); }
-$('#loupeBtn').classList.toggle('on', loupeOn); $('#loupeBtn').onclick = toggleLoupe;
+function toggleLoupe() { loupeOn = !loupeOn; localStorage.setItem('pm-loupe', loupeOn ? '1' : '0'); $('#loupeBtn').classList.toggle('on', loupeOn); $('#loupeBtn').setAttribute('aria-pressed', String(loupeOn)); if (!loupeOn) hideLoupe(); toast('Magnifier ' + (loupeOn ? 'on' : 'off')); }
+$('#loupeBtn').classList.toggle('on', loupeOn); $('#loupeBtn').setAttribute('aria-pressed', String(loupeOn)); $('#loupeBtn').onclick = toggleLoupe;
 function hideLoupe() { lc.style.display = 'none'; loupeWant = null; }
 function showLoupe(p, e) {
   if (!loupeOn || !doc || !p) return hideLoupe();
@@ -512,17 +617,20 @@ function showLoupe(p, e) {
   lc.style.left = x + 'px'; lc.style.top = y + 'px'; lc.style.display = 'block';
   const mag = +$('#loupeMag').value, S = zoom * mag * dpr; // device px per page unit inside loupe
   const ctx = lc.getContext('2d');
-  // instant preview from the main canvas
-  const g0 = canvas._reg || { x0: 0, y0: 0, w: doc.sizes[page].w }, k = canvas.width / g0.w, half = L / 2 / S;
+  // instant preview from what is already drawn: the detail layer where it covers the loupe, otherwise the base
+  const half = L / 2 / S, key = viewKey(), useDetail = !!(canvas._on && canvas._key === key && canvas._reg && covers(canvas._reg, { x0: p[0] - half, y0: p[1] - half, w: 2 * half, h: 2 * half }));
+  const src = useDetail ? canvas : base, g0 = useDetail ? canvas._reg : { x0: 0, y0: 0, w: doc.sizes[page].w }, k = src.width / g0.w;
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, L, L);
-  if (canvas.width) ctx.drawImage(canvas, (p[0] - g0.x0 - half) * k, (p[1] - g0.y0 - half) * k, 2 * half * k, 2 * half * k, 0, 0, L, L);
+  if (src.width && (useDetail || base._key === key)) ctx.drawImage(src, (p[0] - g0.x0 - half) * k, (p[1] - g0.y0 - half) * k, 2 * half * k, 2 * half * k, 0, 0, L, L);
   loupeOverlay(ctx, p, S, L);
-  loupeWant = { p: p.slice(), S, L, pg: page }; sharpLoupe();
+  // the sharp version waits until the finger rests: on a heavy plan each one redraws the whole page
+  loupeWant = { p: p.slice(), S, L, pg: page }; lc.dataset.sharp = ''; clearTimeout(sharpLoupe.t); sharpLoupe.t = setTimeout(sharpLoupe, 120);
 }
+const loupeBuf = document.createElement('canvas'); loupeBuf.width = loupeBuf.height = 0;
 async function sharpLoupe() {
   if (loupeBusy || !loupeWant) return; const w = loupeWant; loupeBusy = true;
   try {
-    const off = document.createElement('canvas'); off.width = w.L; off.height = w.L; const oc = off.getContext('2d'); oc.fillStyle = '#fff'; oc.fillRect(0, 0, w.L, w.L);
+    const off = loupeBuf; if (off.width !== w.L || off.height !== w.L) { off.width = w.L; off.height = w.L; } const oc = off.getContext('2d'); oc.fillStyle = '#fff'; oc.fillRect(0, 0, w.L, w.L);
     if (doc.type === 'pdf') { const pg = await doc.pdf.getPage(w.pg); const vp = pg.getViewport({ scale: w.S, offsetX: -(w.p[0] * w.S - w.L / 2), offsetY: -(w.p[1] * w.S - w.L / 2) });
       await pg.render({ canvasContext: oc, viewport: vp }).promise; }
     else if (doc.type === 'cad') { CAD.draw(oc, doc.cad, w.S, -(w.p[0] * w.S - w.L / 2), -(w.p[1] * w.S - w.L / 2), proj.hidden || {}); }
@@ -530,7 +638,7 @@ async function sharpLoupe() {
     if (loupeWant && lc.style.display !== 'none' && loupeWant.pg === w.pg) { const cur = loupeWant, ctx = lc.getContext('2d');
       if (cur.p[0] === w.p[0] && cur.p[1] === w.p[1] && cur.S === w.S) { ctx.drawImage(off, 0, 0); loupeOverlay(ctx, w.p, w.S, w.L); lc.dataset.sharp = '1'; } }
   } catch (err) { }
-  loupeBusy = false; if (loupeWant && (loupeWant.p[0] !== w.p[0] || loupeWant.p[1] !== w.p[1] || loupeWant.S !== w.S)) { lc.dataset.sharp = ''; setTimeout(sharpLoupe, 30); }
+  loupeBusy = false; if (loupeWant && (loupeWant.p[0] !== w.p[0] || loupeWant.p[1] !== w.p[1] || loupeWant.S !== w.S)) { lc.dataset.sharp = ''; clearTimeout(sharpLoupe.t); sharpLoupe.t = setTimeout(sharpLoupe, 120); }
 }
 function loupeOverlay(ctx, p, S, L) {
   const T = q => [(q[0] - p[0]) * S + L / 2, (q[1] - p[1]) * S + L / 2], dpr = window.devicePixelRatio || 1;
@@ -548,7 +656,6 @@ function nudge(dx, dy) { if (!draft || !draft.pts.length) return; const i = Math
 document.querySelectorAll('.nud').forEach(b => b.onclick = () => { const [x, y] = b.dataset.n.split(',').map(Number); nudge(x, y); });
 $('#ptSel').onclick = () => { if (draft && draft.pts.length > 1) { calSel = (calSel + 1) % draft.pts.length; draw(); } };
 $('#calSetBtn').onclick = () => finishDraft();
-$('#loupeMag').addEventListener('change', () => { if (loupeWant) { const r = svg.getBoundingClientRect(); } });
 vpEl.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !gesture) hideLoupe(); });
 const _udb = updateDrawBar; updateDrawBar = function () { _udb(); const adj = !!draft && draft.pts.length > 0 && PLACE.includes(tool);
   document.body.classList.toggle('adj', adj); document.body.classList.toggle('caladj', !!draft && draft.type === 'calibrate' && draft.pts.length === 2);
@@ -578,10 +685,10 @@ if (proj) resetHist();
 // ---- snapping ("auto aim") ----
 let snapOn = localStorage.getItem('pm-snap') !== '0', snapHit = null;
 const geomCache = {};   // page -> {segs: Float64Array-like arrays, grid: Map, cell, pts: [] } or image pixel data
-$('#snapBtn').classList.toggle('on', snapOn);
-function toggleSnap() { snapOn = !snapOn; localStorage.setItem('pm-snap', snapOn ? '1' : '0'); $('#snapBtn').classList.toggle('on', snapOn); snapHit = null; showSnapMark(); toast('Snap ' + (snapOn ? 'on' : 'off')); }
+$('#snapBtn').classList.toggle('on', snapOn); $('#snapBtn').setAttribute('aria-pressed', String(snapOn));
+function toggleSnap() { snapOn = !snapOn; localStorage.setItem('pm-snap', snapOn ? '1' : '0'); $('#snapBtn').classList.toggle('on', snapOn); $('#snapBtn').setAttribute('aria-pressed', String(snapOn)); snapHit = null; showSnapMark(); toast('Snap ' + (snapOn ? 'on' : 'off')); }
 $('#snapBtn').onclick = toggleSnap;
-document.addEventListener('keydown', e => { if (e.target.matches('input,textarea,select')) return; if (e.key.toLowerCase() === 's' && !e.ctrlKey && !e.metaKey && !e.altKey) toggleSnap(); });
+document.addEventListener('keydown', e => { if (e.target.matches('input,textarea,select') || document.querySelector('dialog[open]')) return; if (e.key.toLowerCase() === 's' && !e.ctrlKey && !e.metaKey && !e.altKey) toggleSnap(); });
 const CELL = 24;
 function gridAdd(grid, i, x1, y1, x2, y2) {
   const cx1 = Math.floor(Math.min(x1, x2) / CELL), cx2 = Math.floor(Math.max(x1, x2) / CELL), cy1 = Math.floor(Math.min(y1, y2) / CELL), cy2 = Math.floor(Math.max(y1, y2) / CELL);
@@ -592,36 +699,54 @@ function gridAdd(grid, i, x1, y1, x2, y2) {
 }
 async function buildGeom(pg) {
   if (geomCache[pg]) return geomCache[pg];
-  const G = geomCache[pg] = { segs: [], grid: new Map(), ready: false };
-  if (!doc) return G;
-  if (doc.type === 'cad') { const M = doc.cad, hid = proj.hidden || {}; G.pts = []; G.pgrid = new Map();
+  const G = { segs: [], grid: new Map(), ready: false }, d = doc;
+  // A plan that is still loading has no pages yet: return without caching so the next call builds it. Caching here left
+  // snapping off for the whole plan when a file was opened while the previous plan's index was still being built.
+  if (!d || !d.sizes[pg] || (d.type === 'pdf' && !(d.pdf && d.vps[pg]))) return G;
+  geomCache[pg] = G;
+  if (d.type === 'cad') { const M = d.cad, hid = (proj && proj.hidden) || {}; G.pts = []; G.pgrid = new Map();
     // typed-array view: G.segs is a small accessor, not a copy of every segment
     const hidL = M.layerNames.map(n => !!hid[n]), ids = []; for (let i = 0; i < M.nSegs; i++) if (!hidL[M.sL[i]]) ids.push(i);
     const sx = M.sx, idx = Uint32Array.from(ids); G.cad = { sx, idx, sK: M.sK, sL: M.sL }; G.segs = new Proxy({ length: idx.length }, { get: (o, k) => k === 'length' ? idx.length : (typeof k === 'string' && /^\d+$/.test(k)) ? (j => [sx[4 * j], sx[4 * j + 1], sx[4 * j + 2], sx[4 * j + 3], M.sK[j], M.sL[j]])(idx[+k]) : undefined });
     const KN = ['end', 'mid', 'center']; G.pts = { get: i => [M.px[2 * i], M.px[2 * i + 1], KN[M.pK[i]]] };
     for (let i = 0; i < M.nPts; i++) if (!hidL[M.pL[i]]) { const k = Math.floor(M.px[2 * i] / CELL) + ',' + Math.floor(M.px[2 * i + 1] / CELL); let c = G.pgrid.get(k); if (!c) G.pgrid.set(k, c = []); c.push(i); }
     for (let i = 0; i < idx.length; i++) { const j = idx[i]; gridAdd(G.grid, i, sx[4 * j], sx[4 * j + 1], sx[4 * j + 2], sx[4 * j + 3]); } G.ready = true; return G; }
-  if (doc.type === 'image') { const c = document.createElement('canvas'); c.width = doc.sizes[1].w; c.height = doc.sizes[1].h; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(doc.img, 0, 0); G.pix = x.getImageData(0, 0, c.width, c.height); G.ready = true; return G; }
-  const page = await doc.pdf.getPage(pg), ops = await page.getOperatorList(), vp = doc.vps[pg], OPS = pdfjsLib.OPS, U = pdfjsLib.Util;
-  let ctm = [1, 0, 0, 1, 0, 0]; const stack = [];
-  const T = (x, y) => { const q = U.applyTransform([x, y], ctm); return U.applyTransform(q, vp.transform); };
-  const add = (a, b) => { if (G.segs.length < 200000 && (Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]) > 0.05)) G.segs.push([a[0], a[1], b[0], b[1]]); };
-  for (let i = 0; i < ops.fnArray.length; i++) { const fn = ops.fnArray[i], args = ops.argsArray[i];
-    if (fn === OPS.save) stack.push(ctm.slice()); else if (fn === OPS.restore) { if (stack.length) ctm = stack.pop(); }
-    else if (fn === OPS.transform) ctm = U.transform(ctm, args);
-    else if (fn === OPS.paintFormXObjectBegin) { stack.push(ctm.slice()); if (args[0]) ctm = U.transform(ctm, args[0]); }
-    else if (fn === OPS.paintFormXObjectEnd) { if (stack.length) ctm = stack.pop(); }
-    else if (fn === OPS.constructPath) { const sub = args[0], co = args[1]; let j = 0, cur = null, start = null;
+  if (d.type === 'image') { const c = document.createElement('canvas'); c.width = d.sizes[1].w; c.height = d.sizes[1].h; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(d.img, 0, 0); G.pix = x.getImageData(0, 0, c.width, c.height); c.width = c.height = 0; G.ready = true; return G; }
+  // Reuse the operator list pdf.js already holds from drawing the page; asking for it again made the worker parse the
+  // whole page a second time and kept a second copy in memory.
+  let page, ops;
+  try { page = await d.pdf.getPage(pg); ops = cachedOps(page) || await page.getOperatorList(); }
+  catch (e) { if (geomCache[pg] === G) delete geomCache[pg]; return G; } // closed or failed: let a later call try again
+  if (doc !== d) { if (geomCache[pg] === G) delete geomCache[pg]; return G; } // another plan was opened meanwhile
+  const vp = d.vps[pg], OPS = pdfjsLib.OPS, U = pdfjsLib.Util;
+  // Segments go into one Float64Array (x1 y1 x2 y2 each) rather than an array per segment, and points are transformed
+  // without allocating: the old version created two arrays per path point.
+  const MAXS = 200000; let sx = new Float64Array(4 * 4096), n = 0, ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm); const stack = [];
+  const setCtm = m => { ctm = m; M = U.transform(vp.transform, m); };
+  const add = (x1, y1, x2, y2) => { if (n >= MAXS || Math.abs(x1 - x2) + Math.abs(y1 - y2) <= 0.05) return;
+    if (4 * n + 4 > sx.length) { const b = new Float64Array(Math.min(4 * MAXS, sx.length * 2)); b.set(sx); sx = b; }
+    const o = 4 * n++; sx[o] = x1; sx[o + 1] = y1; sx[o + 2] = x2; sx[o + 3] = y2; };
+  for (let i = 0; i < ops.fnArray.length && n < MAXS; i++) { const fn = ops.fnArray[i], args = ops.argsArray[i];
+    if (fn === OPS.save) stack.push(ctm); else if (fn === OPS.restore) { if (stack.length) setCtm(stack.pop()); }
+    else if (fn === OPS.transform) setCtm(U.transform(ctm, args));
+    else if (fn === OPS.paintFormXObjectBegin) { stack.push(ctm); if (args[0]) setCtm(U.transform(ctm, args[0])); }
+    else if (fn === OPS.paintFormXObjectEnd) { if (stack.length) setCtm(stack.pop()); }
+    else if (fn === OPS.constructPath) { const sub = args[0], co = args[1], [a, b, c, d, e, f] = M; let j = 0, cur = false, cx = 0, cy = 0, st = false, s0x = 0, s0y = 0;
       for (const op of sub) {
-        if (op === OPS.moveTo) { cur = start = T(co[j], co[j + 1]); j += 2; }
-        else if (op === OPS.lineTo) { const n = T(co[j], co[j + 1]); j += 2; if (cur) add(cur, n); cur = n; }
-        else if (op === OPS.curveTo) { const n = T(co[j + 4], co[j + 5]); j += 6; if (cur) add(cur, n); cur = n; }
-        else if (op === OPS.curveTo2 || op === OPS.curveTo3) { const n = T(co[j + 2], co[j + 3]); j += 4; if (cur) add(cur, n); cur = n; }
-        else if (op === OPS.rectangle) { const [x, y, w, h] = co.slice(j, j + 4); j += 4; const p1 = T(x, y), p2 = T(x + w, y), p3 = T(x + w, y + h), p4 = T(x, y + h); add(p1, p2); add(p2, p3); add(p3, p4); add(p4, p1); cur = start = p1; }
-        else if (op === OPS.closePath) { if (cur && start) add(cur, start); cur = start; }
+        if (op === OPS.moveTo) { const x = co[j], y = co[j + 1]; j += 2; cx = s0x = a * x + c * y + e; cy = s0y = b * x + d * y + f; cur = st = true; }
+        else if (op === OPS.lineTo || op === OPS.curveTo || op === OPS.curveTo2 || op === OPS.curveTo3) { // curves snap along their chord, as before
+          const k = op === OPS.lineTo ? 0 : op === OPS.curveTo ? 4 : 2, x = co[j + k], y = co[j + k + 1]; j += k + 2;
+          const nx = a * x + c * y + e, ny = b * x + d * y + f; if (cur) add(cx, cy, nx, ny); cx = nx; cy = ny; cur = true; }
+        else if (op === OPS.rectangle) { const x = co[j], y = co[j + 1], w = co[j + 2], h = co[j + 3]; j += 4;
+          const X = (u, v) => a * u + c * v + e, Y = (u, v) => b * u + d * v + f, x1 = X(x, y), y1 = Y(x, y), x2 = X(x + w, y), y2 = Y(x + w, y), x3 = X(x + w, y + h), y3 = Y(x + w, y + h), x4 = X(x, y + h), y4 = Y(x, y + h);
+          add(x1, y1, x2, y2); add(x2, y2, x3, y3); add(x3, y3, x4, y4); add(x4, y4, x1, y1); cx = s0x = x1; cy = s0y = y1; cur = st = true; }
+        else if (op === OPS.closePath) { if (cur && st) add(cx, cy, s0x, s0y); cur = st; cx = s0x; cy = s0y; }
       } } }
-  G.segs.forEach((s, i) => gridAdd(G.grid, i, s[0], s[1], s[2], s[3])); G.ready = true; return G;
+  sx = sx.slice(0, 4 * n); G.px = sx;
+  G.segs = new Proxy({ length: n }, { get: (o, k) => k === 'length' ? n : (typeof k === 'string' && /^\d+$/.test(k)) ? [sx[4 * k], sx[4 * k + 1], sx[4 * k + 2], sx[4 * k + 3]] : undefined });
+  for (let i = 0; i < n; i++) gridAdd(G.grid, i, sx[4 * i], sx[4 * i + 1], sx[4 * i + 2], sx[4 * i + 3]); G.ready = true; return G;
 }
+function cachedOps(page) { try { for (const st of page._intentStates.values()) { const o = st.operatorList; if (o && o.lastChunk && o.fnArray.length) return o; } } catch (e) { } return null; }
 function nearSegs(G, p, r) { const out = new Set(); const c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
   for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) { const c = G.grid.get(cx + ',' + cy); if (c) c.forEach(i => out.add(i)); } return [...out]; }
 function projSeg(p, s) { const dx = s[2] - s[0], dy = s[3] - s[1], L2 = dx * dx + dy * dy; let t = L2 ? ((p[0] - s[0]) * dx + (p[1] - s[1]) * dy) / L2 : 0; t = Math.max(0, Math.min(1, t)); return [s[0] + t * dx, s[1] + t * dy]; }
@@ -684,10 +809,16 @@ const _draw3 = draw; draw = function () { _draw3(); if (snapHit && (PLACE.includ
 const _loadDoc = loadDoc; loadDoc = async function (...a) { for (const k in geomCache) delete geomCache[k]; const r = await _loadDoc(...a); return r; };
 vpEl.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !gesture) { snapHit = null; showSnapMark(); } });
 window.PMsnap = { buildGeom: pg => buildGeom(pg), get hit() { return snapHit; }, geom: geomCache };
-const _rc = renderCanvas; renderCanvas = async function () { await _rc(); if (doc && !geomCache[page]) buildGeom(page).then(() => draw()); };
+// Snap geometry is built when something uses it: CAD drawings, a page with sleeves, or a measuring tool in hand.
+// Building it on every open made heavy PDFs slower to open and is wasted when you only look at the plan.
+const snapTool = t => PLACE.includes(t) || ['count', 'sleeve', 'origin'].includes(t);
+const geomWanted = () => !!doc && (doc.type === 'cad' || snapTool(tool) || !!(proj && proj.items.some(i => i.page === page && i.type === 'sleeve')));
+const warmGeom = () => { if (doc && !geomCache[page]) buildGeom(page).then(() => draw()).catch(() => { }); };
+const _rc = renderCanvas; renderCanvas = async function () { await _rc(); if (geomWanted()) warmGeom(); };
+const _setToolG = setTool; setTool = function (t) { _setToolG(t); if (snapTool(t)) warmGeom(); };
 
 // ---- CAD layers panel ----
-function layersChanged() { if (!doc || doc.type !== 'cad') return; for (const k in geomCache) delete geomCache[k]; sleeveCache.clear(); renderCanvas(); draw(); }
+function layersChanged() { if (!doc || doc.type !== 'cad') return; for (const k in geomCache) delete geomCache[k]; sleeveCache.clear(); contentGen++; renderCanvas(); draw(); }
 function renderLayers() {
   const box = $('#layers'); if (!doc || doc.type !== 'cad') { box.hidden = true; return; } box.hidden = false; const hid = proj.hidden || {};
   $('#layerList').innerHTML = doc.cad.layers.map(l => `<label class="lyr"><input type="checkbox" data-layer="${esc(l.name)}" ${hid[l.name] ? '' : 'checked'}><span class="sw" style="background:${l.color}"></span>${esc(l.name)}</label>`).join('');
@@ -704,7 +835,7 @@ function sleeveInfo(it) {
   let r = sleeveCache.get(it.id); if (!r || r.key !== key) {
     r = { key }; const minLen = 0.015 * Math.min(doc.sizes[it.page].w, doc.sizes[it.page].h);
     if (G && G.ready && G.segs.length) { let bx = Infinity, by = Infinity;
-      const NS = G.segs.length, C = G.cad, tmp = [0, 0, 0, 0, 0, 0]; for (let si = 0; si < NS; si++) { let s; if (C) { const j = C.idx[si]; if (C.sK[j]) continue; tmp[0] = C.sx[4 * j]; tmp[1] = C.sx[4 * j + 1]; tmp[2] = C.sx[4 * j + 2]; tmp[3] = C.sx[4 * j + 3]; tmp[4] = 0; tmp[5] = C.sL[j]; s = tmp; } else s = G.segs[si]; if (s[4]) continue; const dx = s[2] - s[0], dy = s[3] - s[1], len = Math.hypot(dx, dy); if (len < minLen) continue;
+      const NS = G.segs.length, C = G.cad, tmp = [0, 0, 0, 0, 0, 0]; for (let si = 0; si < NS; si++) { let s; if (C) { const j = C.idx[si]; if (C.sK[j]) continue; tmp[0] = C.sx[4 * j]; tmp[1] = C.sx[4 * j + 1]; tmp[2] = C.sx[4 * j + 2]; tmp[3] = C.sx[4 * j + 3]; tmp[4] = 0; tmp[5] = C.sL[j]; s = tmp; } else if (G.px) { const o = 4 * si; tmp[0] = G.px[o]; tmp[1] = G.px[o + 1]; tmp[2] = G.px[o + 2]; tmp[3] = G.px[o + 3]; tmp[4] = 0; tmp[5] = undefined; s = tmp; } else s = G.segs[si]; if (s[4]) continue; const dx = s[2] - s[0], dy = s[3] - s[1], len = Math.hypot(dx, dy); if (len < minLen) continue;
         if (Math.abs(dx) <= len * 0.01 && Math.min(s[1], s[3]) <= p[1] + 1e-6 && Math.max(s[1], s[3]) >= p[1] - 1e-6) { const x = (s[0] + s[2]) / 2, d = Math.abs(x - p[0]); if (d > 1e-6 && d < bx) { bx = d; r.rx = { x, L: s[5] }; } }
         if (Math.abs(dy) <= len * 0.01 && Math.min(s[0], s[2]) <= p[0] + 1e-6 && Math.max(s[0], s[2]) >= p[0] - 1e-6) { const y = (s[1] + s[3]) / 2, d = Math.abs(y - p[1]); if (d > 1e-6 && d < by) { by = d; r.ry = { y, L: s[5] }; } } } }
     sleeveCache.set(it.id, r); }
@@ -726,7 +857,7 @@ const _drawItem = drawItem; drawItem = function (it, g, isDraft) {
   el('circle', { cx: x, cy: y, r: R, fill: '#fff', 'fill-opacity': 0.85, stroke: c, 'stroke-width': 2.5 / zoom }, grp);
   el('path', { d: `M${x - R} ${y}H${x + R}M${x} ${y - R}V${y + R}`, stroke: c, 'stroke-width': 1.2 / zoom }, grp);
   label(grp, x, y - R - 4 / zoom, sleeveName(it) + ' ' + (it.size || '') + (it.label ? ' ' + it.label : '') + sleeveHtLabel(it), c);
-  if (it.id === selId) el('rect', { x: x - 6 / zoom, y: y - 6 / zoom, width: 12 / zoom, height: 12 / zoom, fill: 'none', stroke: '#1976d2', 'stroke-width': 2 / zoom, 'data-v': 0, class: 'handle' }, grp);
+  if (it.id === selId) el('rect', { x: x - 6 / zoom, y: y - 6 / zoom, width: 12 / zoom, height: 12 / zoom, fill: 'none', stroke: '#1d5fb4', 'stroke-width': 2 / zoom, 'data-v': 0, class: 'handle' }, grp);
 };
 const _draw4 = draw; draw = function () { _draw4(); const o = proj && proj.origins && proj.origins[page]; if (!o) return; const g = el('g', { 'pointer-events': 'none' }, svg), s = 14 / zoom, w = 2 / zoom;
   el('path', { d: `M${o[0] - s} ${o[1]}H${o[0] + s}M${o[0]} ${o[1] - s}V${o[1] + s}`, stroke: '#c2185b', 'stroke-width': w }, g); el('circle', { cx: o[0], cy: o[1], r: s / 2, fill: 'none', stroke: '#c2185b', 'stroke-width': w }, g);
@@ -901,10 +1032,10 @@ setNum($('#eTos'), parseEl, v => { const it = selItem(); if (it) { if (v == null
 setNum($('#eThk'), parseThk, v => { const it = selItem(); if (it) { if (v == null) delete it.thk; else it.thk = v; } });
 setNum($('#eExt'), parseThk, v => { const it = selItem(); if (it) { if (v == null) delete it.ext; else it.ext = v; } });
 // Slab zone tool: draws an area that is marked as a slab zone
-(function () { const b = document.createElement('button'); b.id = 'zoneTool'; b.className = 'tool'; b.title = 'Slab zone: draw an area with its own top of slab and thickness'; b.dataset.icon = 'area'; b.innerHTML = '<span class="t">Slab zone</span>';
-  const ar = document.querySelector('[data-tool=area]'); ar.after(b); try { const ic = ar.querySelector('svg'); if (ic) b.prepend(ic.cloneNode(true)); } catch (e) { } })();
+(function () { const b = document.createElement('button'); b.id = 'zoneTool'; b.className = 'tool'; b.title = 'Slab zone: draw an area with its own top of slab and thickness'; b.dataset.icon = 'zone'; b.setAttribute('aria-pressed', 'false'); b.innerHTML = svgIc('zone') + '<span class="t">Slab zone</span>';
+  document.querySelector('[data-tool=area]').after(b); })();
 let zoneNext = false;
-$('#zoneTool').onclick = () => { setTool('area'); zoneNext = true; document.querySelectorAll('.tool').forEach(x => x.classList.toggle('active', x.id === 'zoneTool')); toast('Draw the slab zone outline, then Finish. Then enter its top of slab and thickness.', 5000); };
+$('#zoneTool').onclick = () => { setTool('area'); zoneNext = true; document.querySelectorAll('.tool').forEach(x => x.classList.toggle('active', x.id === 'zoneTool')); syncToolUI(); toast('Draw the slab zone outline, then Finish. Then enter its top of slab and thickness.', 5000); };
 const _setToolZ = setTool; setTool = function (t) { if (zoneNext && t !== 'area') zoneNext = false; _setToolZ(t); };
 const _changedZ = changed; changed = function () { if (zoneNext && proj) { const it = proj.items[proj.items.length - 1]; if (it && it.type === 'area' && !it.slab && !it._zchk) { const d = slabDefault(it.page); it.slab = { tos: d.tos ?? null, thk: d.thk ?? null }; it.label = it.label || 'Slab zone'; zoneNext = false; selId = it.id; setTool('select'); renderList(); } } _changedZ(); };
 // Sleeve count panel: level defaults + heights
@@ -919,7 +1050,7 @@ const _renderSC = renderSleeveCount; renderSleeveCount = function () { _renderSC
 Object.assign(window.PM, { sleeveHeight, parseEl, parseThk, setSlabDefault: (pg, o) => { proj.slab = proj.slab || {}; proj.slab[pg] = Object.assign({}, proj.slab[pg], o); htText.clear(); changed(); } });
 
 // re-render the visible region after scrolling settles (bitmap stays in place meanwhile)
-vpEl.addEventListener('scroll', () => { if (!doc) return; gestureUntil = Math.max(gestureUntil, performance.now() + 120); const g = canvas._reg; if (!g) return; scheduleRender(150); }, { passive: true });
+vpEl.addEventListener('scroll', () => { if (!doc) return; gestureUntil = Math.max(gestureUntil, performance.now() + 120); scheduleRender(150); }, { passive: true }); // cheap when the view is still covered
 
 // ---- Project file (.pmproj): plan geometry + markups in one compact file. A DWG read on a computer can be opened on a phone without the DWG converter. ----
 const TA = { Float64Array, Float32Array, Uint32Array, Uint16Array, Uint8Array };
@@ -940,7 +1071,7 @@ async function readPmproj(blob) {
   return { head, cad: head.cad ? dec(head.cad) : null, bytes: head.bytes ? dec(head.bytes) : null }; }
 async function openPmproj(f) {
   toast('Opening project file...', 30000); await new Promise(r => setTimeout(r, 30));
-  try { const { head, cad, bytes } = await readPmproj(f); await loadDoc(cad ? { cadPack: cad } : new Uint8Array(bytes), head.mime, head.name);
+  try { const { head, cad, bytes } = await readPmproj(f); await loadDoc(cad ? { cadPack: cad } : ownBytes(bytes), head.mime, head.name);
     proj = Object.assign({ origins: {}, hidden: {}, slab: {} }, head.proj); migrateProjectUnits(proj); resetHist(); $('#units').value = proj.units; if ($('#units2')) $('#units2').value = proj.units; page = 1; selId = null; draft = null; fitPage(); renderLayers(); persistSoon(); toast('Opened ' + f.name); }
   catch (err) { console.error(err); toast('Could not open the project file: ' + err.message, 8000); } }
 $('#pmprojBtn').onclick = async () => { if (!proj || !doc) return toast('Open a plan first.'); toast('Building project file...', 20000); const b = await buildPmproj(); download(b, (proj.name || 'project') + '.pmproj', 'application/octet-stream'); toast('Saved ' + (b.size / 1e6).toFixed(1) + ' MB project file'); };
@@ -958,10 +1089,10 @@ function deleteItems(ids, msg) { if (!proj || !ids.length) return; commitHist();
 const undoT = document.createElement('div'); undoT.id = 'undoToast'; undoT.hidden = true; undoT.innerHTML = '<span></span><button type="button" class="btn small" id="undoToastBtn">Undo</button>'; document.body.appendChild(undoT);
 function undoToast(msg) { undoT.querySelector('span').textContent = msg; undoT.hidden = false; clearTimeout(undoT._h); undoT._h = setTimeout(() => undoT.hidden = true, 6000); }
 $('#undoToastBtn').onclick = () => { undoT.hidden = true; undo(); };
-const TRASH = '<svg class="ic" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg>';
+const TRASH = svgIc('trash');
 // floating action bar near the selected markup
 const selBar = document.createElement('div'); selBar.id = 'selBar'; selBar.hidden = true;
-selBar.innerHTML = `<button type="button" class="btn" id="selEdit">Edit</button><button type="button" class="btn danger" id="selDel">${TRASH}Delete</button>`; document.body.appendChild(selBar);
+selBar.innerHTML = `<button type="button" class="btn" id="selEdit">${svgIc('edit')}Edit</button><button type="button" class="btn danger" id="selDel">${TRASH}Delete</button>`; document.body.appendChild(selBar);
 function placeSelBar() { const it = selItem(); if (!it || (document.body.classList.contains('sheetopen') && matchMedia('(max-width: 800px)').matches) || tool !== 'select' || draft || it.page !== page || !it.pts || !it.pts.length) { selBar.hidden = true; return; }
   const r = svg.getBoundingClientRect(), xs = it.pts.map(q => r.left + q[0] * zoom), ys = it.pts.map(q => r.top + q[1] * zoom), v = vpEl.getBoundingClientRect();
   selBar.hidden = false; const w = selBar.offsetWidth || 190, h = selBar.offsetHeight || 48;
@@ -971,11 +1102,9 @@ $('#selDel').onclick = deleteSel;
 $('#selEdit').onclick = () => { if (matchMedia('(max-width: 800px)').matches) { document.body.classList.add('sheetopen'); try { updateSheet(); } catch (e) { } } $('#edit').scrollIntoView({ block: 'nearest' }); };
 vpEl.addEventListener('scroll', () => { if (!selBar.hidden) placeSelBar(); }, { passive: true });
 // top bar trash button (desktop)
-const delBtn = document.createElement('button'); delBtn.id = 'delBtn'; delBtn.className = 'btn icon danger'; delBtn.title = 'Delete selected (Delete key)'; delBtn.innerHTML = TRASH; delBtn.hidden = true; $('#redoBtn').after(delBtn); delBtn.onclick = deleteSel;
+const delBtn = document.createElement('button'); delBtn.id = 'delBtn'; delBtn.className = 'btn icon danger needdoc'; delBtn.title = 'Delete selected (Delete key)'; delBtn.setAttribute('aria-label', 'Delete selected'); delBtn.innerHTML = TRASH; delBtn.hidden = true; $('#redoBtn').after(delBtn); delBtn.onclick = deleteSel;
 // list rows: trash button + swipe left on touch
-const _renderListD = renderList; renderList = function () { _renderListD(); if (!proj) return;
-  document.querySelectorAll('#list .row').forEach(r => { const b = document.createElement('button'); b.type = 'button'; b.className = 'rdel'; b.title = 'Delete'; b.setAttribute('aria-label', 'Delete'); b.innerHTML = TRASH; r.appendChild(b); });
-  delBtn.hidden = !selItem(); placeSelBar(); };
+const _renderListD = renderList; renderList = function () { _renderListD(); if (!proj) return; delBtn.hidden = !selItem(); placeSelBar(); };
 $('#list').addEventListener('click', e => { const b = e.target.closest('.rdel'); if (!b) return; e.stopPropagation(); const r = b.closest('.row'), it = proj.items.find(i => i.id === r.dataset.id); if (it) deleteItems([it.id], TYPE_NAMES[it.type] + ' deleted'); }, true);
 let sw = null;
 $('#list').addEventListener('pointerdown', e => { const r = e.target.closest('.row'); if (r && e.pointerType !== 'mouse') sw = { r, x: e.clientX, y: e.clientY }; });
@@ -985,16 +1114,16 @@ $('#list').addEventListener('pointerup', swEnd); $('#list').addEventListener('po
 // sleeve panel: delete all sleeves of one size
 const _renderSCD = renderSleeveCount; renderSleeveCount = function () { _renderSCD(); const t = document.querySelector('#slvBody table'); if (!t) return;
   t.querySelectorAll('tr').forEach((tr, i) => { if (!i) { tr.appendChild(document.createElement('th')); return; } const k = tr.cells[0].textContent, td = tr.insertCell(); td.innerHTML = `<button type="button" class="rdel" data-size="${esc(k)}" title="Delete these sleeves" aria-label="Delete ${esc(k)} sleeves">${TRASH}</button>`; }); };
-$('#slvBody').addEventListener('click', e => { const b = e.target.closest('.rdel'); if (!b) return; e.preventDefault(); const k = b.dataset.size, ids = proj.items.filter(i => i.type === 'sleeve' && (i.size || 'No size') === k).map(i => i.id);
-  if (!ids.length || !confirm(`Delete all ${ids.length} sleeve${ids.length > 1 ? 's' : ''} of size ${k}? You can undo this.`)) return; deleteItems(ids, ids.length + ' sleeves deleted'); renderSleeveCount(); });
+$('#slvBody').addEventListener('click', async e => { const b = e.target.closest('.rdel'); if (!b) return; e.preventDefault(); const k = b.dataset.size, ids = proj.items.filter(i => i.type === 'sleeve' && (i.size || 'No size') === k).map(i => i.id);
+  if (!ids.length || !(await ask({ title: `Delete ${ids.length} sleeve${ids.length > 1 ? 's' : ''}?`, message: `All sleeves of size ${k} will be removed. You can undo this.`, ok: 'Delete sleeves', danger: true }))) return; deleteItems(ids, ids.length + ' sleeves deleted'); renderSleeveCount(); });
 // menu: Clear page / Delete all of a type
 (function () { const m = $('#moreDanger') || $('#moreMenu'), mk = (id, txt) => { const b = document.createElement('button'); b.type = 'button'; b.className = 'btn danger'; b.id = id; b.innerHTML = TRASH + txt; m.appendChild(b); return b; };
-  mk('clearPageBtn', 'Clear page').onclick = () => { if (!proj) return; closeMoreMenu(); const ids = proj.items.filter(i => i.page === page).map(i => i.id); if (!ids.length) return toast('Nothing on this page.'); if (confirm(`Delete all ${ids.length} items on this page? You can undo this.`)) deleteItems(ids, ids.length + ' items deleted'); };
+  mk('clearPageBtn', 'Clear page').onclick = async () => { if (!proj) return; closeMoreMenu(); const ids = proj.items.filter(i => i.page === page).map(i => i.id); if (!ids.length) return toast('Nothing on this page.'); if (await ask({ title: 'Clear this page?', message: `All ${ids.length} items on page ${page} will be deleted. You can undo this.`, ok: 'Clear page', danger: true })) deleteItems(ids, ids.length + ' items deleted'); };
   mk('delTypeBtn', 'Delete all of a type').onclick = () => { if (!proj) return; closeMoreMenu(); const c = {}; proj.items.filter(i => i.page === page).forEach(i => c[i.type] = (c[i.type] || 0) + 1); const ks = Object.keys(c); if (!ks.length) return toast('Nothing on this page.');
     const d = $('#delTypeDlg'); d.querySelector('.list').innerHTML = ks.map(k => `<button type="button" class="btn danger" data-t="${k}">${TRASH}${TYPE_NAMES[k]} (${c[k]})</button>`).join(''); d.showModal(); }; })();
-const dtd = document.createElement('dialog'); dtd.id = 'delTypeDlg'; dtd.innerHTML = '<form method="dialog"><h3>Delete all of a type (this page)</h3><div class="list"></div><div class="frow"><button class="btn" value="cancel">Cancel</button></div></form>'; document.body.appendChild(dtd);
-dtd.addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (!b) return; const t = b.dataset.t, ids = proj.items.filter(i => i.page === page && i.type === t).map(i => i.id);
-  if (confirm(`Delete all ${ids.length} ${TYPE_NAMES[t]} items on this page? You can undo this.`)) { dtd.close(); deleteItems(ids, ids.length + ' ' + TYPE_NAMES[t] + ' deleted'); } });
+const dtd = document.createElement('dialog'); dtd.id = 'delTypeDlg'; dtd.setAttribute('aria-labelledby', 'delTypeTitle'); dtd.innerHTML = '<form method="dialog"><h3 id="delTypeTitle">Delete all of a type</h3><p>Only items on this page are deleted. You can undo this.</p><div class="list"></div><div class="frow"><button class="btn" value="cancel">Cancel</button></div></form>'; document.body.appendChild(dtd);
+dtd.addEventListener('click', async e => { const b = e.target.closest('[data-t]'); if (!b) return; const t = b.dataset.t, ids = proj.items.filter(i => i.page === page && i.type === t).map(i => i.id); dtd.close();
+  if (await ask({ title: `Delete ${ids.length} ${TYPE_NAMES[t]} item${ids.length === 1 ? '' : 's'}?`, message: `Every ${TYPE_NAMES[t]} item on page ${page} will be deleted. You can undo this.`, ok: 'Delete', danger: true })) deleteItems(ids, ids.length + ' ' + TYPE_NAMES[t] + ' deleted'); });
 Object.assign(window.PM, { deleteItems, nearHit }); Object.defineProperty(window.PM, 'selId', { get: () => selId });
 
 // ---- Auto straight: lock near-horizontal / vertical / 45 degree / drawing-angle segments, and align with existing points ----
@@ -1033,9 +1162,9 @@ function drawGuideSvg(g) { if (!guide || !draft) return; const w = 1.2 / zoom, A
   const txt = guide.straight ? 'straight' : 'aligned', [x, y] = guide.q, fs = 11 / zoom, bw = (txt.length * 6.2 + 8) / zoom;
   el('rect', { x: x + 10 / zoom, y: y + 8 / zoom, width: bw, height: 15 / zoom, rx: 3 / zoom, fill: '#2962ff' }, g); const t = el('text', { x: x + 14 / zoom, y: y + 19 / zoom, 'font-size': fs, fill: '#fff', 'font-family': 'sans-serif' }, g); t.textContent = txt;
   g.dataset.guide = txt; }
-(function () { const b = document.createElement('button'); b.id = 'straightBtn'; b.type = 'button'; b.className = 'btn small' + (straightOn ? ' on' : ''); b.title = 'Auto straight: lock near level / plumb / 45 degree lines and line up with other points. Hold Alt to turn off for a moment';
+(function () { const b = document.createElement('button'); b.id = 'straightBtn'; b.type = 'button'; b.className = 'btn small' + (straightOn ? ' on' : ''); b.setAttribute('aria-pressed', String(straightOn)); b.title = 'Auto straight: lock near level / plumb / 45 degree lines and line up with other points. Hold Alt to turn off for a moment';
   b.innerHTML = '<svg class="ic" viewBox="0 0 24 24"><path d="M3 20h18M4 20V4"/><path d="M8 16l10-10" stroke-dasharray="2 2"/></svg><span class="t">Auto straight</span>'; $('#snapBtn').before(b);
-  b.onclick = () => { straightOn = !straightOn; localStorage.setItem('pm-straight', straightOn ? '1' : '0'); b.classList.toggle('on', straightOn); guide = null; showSnapMark(); toast('Auto straight ' + (straightOn ? 'on' : 'off')); }; })();
+  b.onclick = () => { straightOn = !straightOn; localStorage.setItem('pm-straight', straightOn ? '1' : '0'); b.classList.toggle('on', straightOn); b.setAttribute('aria-pressed', String(straightOn)); guide = null; showSnapMark(); toast('Auto straight ' + (straightOn ? 'on' : 'off')); }; })();
 const _ldS = loadDoc; loadDoc = async function (...a) { domAng = null; return _ldS(...a); };
 const _gpS = gotoPage; gotoPage = function (...a) { domAng = null; return _gpS(...a); };
 Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim = (p, prev, alt) => aim(p, { altKey: !!alt, pointerType: 'mouse' }, prev, null); window.PM.domAngle = () => dominantAngle();
@@ -1169,7 +1298,7 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
       syncPrintBox();
     };
     requestAnimationFrame(() => requestAnimationFrame(settle));
-    toast('Blue box = what will print (matches your view). Drag edges to adjust.', 4500);
+    toast('The blue frame is what prints. Drag it or its edges to adjust.', 4500);
   }
   function exitPrintMode() {
     document.body.classList.remove('printmode');
@@ -1239,6 +1368,7 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
       draw();
       const clone = svg.cloneNode(true);
       clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+      clone.setAttribute('font-family', '"Barlow Semi Condensed", "Arial Narrow", Arial, Helvetica, sans-serif'); // web fonts do not load inside an SVG image
       clone.setAttribute('viewBox', `${rect.x} ${rect.y} ${rect.w} ${rect.h}`);
       clone.setAttribute('width', String(W)); clone.setAttribute('height', String(H));
       const xml = new XMLSerializer().serializeToString(clone);
@@ -1315,25 +1445,12 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
     img.style.maxWidth = '100%';
     img.style.objectFit = 'contain';
     img.style.display = 'block';
-    const orient = built.land ? 'landscape' : 'portrait';
     $('#printPageStyle').textContent =
-      `@page{size:letter ${orient};margin:0}` +
+      `@page{size:${pw / 72}in ${ph / 72}in;margin:0}` +
       `@media print{html,body{margin:0!important;width:100%!important}` +
       `#printSheet{width:${pw / 72}in!important;height:${ph / 72}in!important}` +
       `#printImg{width:${pw / 72}in!important;height:${ph / 72}in!important;max-width:100%!important}}`;
     return { ...built, dataUrl, aspect: built.availW / built.availH };
-  }
-
-  async function buildPrintPdfBytes() {
-    const { cnv, pw, ph } = await buildPageCanvas();
-    const { PDFDocument } = PDFLib;
-    const out = await PDFDocument.create();
-    const pg = out.addPage([pw, ph]);
-    const jpg = await (await fetch(cnv.toDataURL('image/jpeg', 0.92))).arrayBuffer();
-    const embedded = await out.embedJpg(jpg);
-    // Full-page image (strip already baked in) — fills the PDF page exactly
-    pg.drawImage(embedded, { x: 0, y: 0, width: pw, height: ph });
-    return await out.save();
   }
 
   let previewCache = null; // { dataUrl, pdfBytes, label, land, name, pw, ph }
@@ -1399,9 +1516,8 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
       sheet.style.height = (built.ph / 72) + 'in';
       img.style.width = (built.pw / 72) + 'in';
       img.style.height = (built.ph / 72) + 'in';
-      const orient = built.land ? 'landscape' : 'portrait';
       $('#printPageStyle').textContent =
-        `@page{size:letter ${orient};margin:0}` +
+        `@page{size:${built.pw / 72}in ${built.ph / 72}in;margin:0}` +
         `@media print{html,body{margin:0!important}` +
         `#printSheet{width:${built.pw / 72}in!important;height:${built.ph / 72}in!important}` +
         `#printImg{width:${built.pw / 72}in!important;height:${built.ph / 72}in!important}}`;
@@ -1409,7 +1525,7 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
       const ppImg = $('#ppImg');
       await new Promise((res, rej) => { ppImg.onload = () => res(); ppImg.onerror = rej; ppImg.src = dataUrl; });
       try { if (ppImg.decode) await ppImg.decode(); } catch (e) { }
-      $('#ppInfo').textContent = built.label + ' · pinch to zoom';
+      $('#ppInfo').textContent = built.label + (isPhoneDev ? '. Pinch to zoom.' : '. Scroll to zoom.');
       $('#ppTitle').textContent = 'Print preview';
       $('#printPreview').hidden = false;
       document.body.classList.add('printpreview');
@@ -1546,9 +1662,6 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
     return await out.save();
   }
 
-  async function doPrint() { return openPreview(); }
-  async function doSavePdf() { return openPreview(); }
-
   $('#printGo').onclick = openPreview;
   $('#ppBack').onclick = () => { closePreview(); };
   $('#ppPrint').onclick = doPreviewPrint;
@@ -1572,3 +1685,116 @@ Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim =
   Object.defineProperty(window.PM, 'previewOpen', { get: () => !$('#printPreview').hidden });
   Object.defineProperty(window.PM, 'previewCache', { get: () => previewCache && { label: previewCache.label, name: previewCache.name, land: previewCache.land, fillRatio: previewCache.fillRatio, hasPdf: !!previewCache.pdfBytes } });
 })();
+
+// ---- In-app dialogs (replace prompt / confirm, which look out of place and cannot take multi-line notes) ----
+// kind: 'confirm' resolves true/false, 'text' (one line) and 'note' (multi-line) resolve the text or null.
+function ask({ title, message = '', ok = 'OK', cancel = 'Cancel', danger = false, kind = 'confirm', value = '', placeholder = '' }) {
+  const d = $('#askDlg'), inp = $('#askInput'), ta = $('#askText'), okB = $('#askOk');
+  if (d.open) return Promise.resolve(kind === 'confirm' ? false : null);
+  return new Promise(res => {
+    d.dataset.kind = kind; $('#askTitle').textContent = title; $('#askMsg').textContent = message;
+    okB.textContent = ok; okB.className = 'btn ' + (danger ? 'danger' : 'primary'); $('#askCancel').textContent = cancel;
+    inp.value = kind === 'text' ? value : ''; ta.value = kind === 'note' ? value : ''; inp.placeholder = ta.placeholder = placeholder;
+    const field = kind === 'text' ? inp : kind === 'note' ? ta : null;
+    d.returnValue = '';
+    d.addEventListener('close', () => { const yes = d.returnValue === 'ok'; res(kind === 'confirm' ? yes : yes ? field.value : null); }, { once: true });
+    d.showModal(); setTimeout(() => { if (field) { field.focus(); if (field.select) field.select(); } else if (danger) $('#askCancel').focus(); else okB.focus(); }, 30);
+  });
+}
+$('#askInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#askDlg').close('ok'); } });
+$('#askText').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('#askDlg').close('ok'); } });
+
+// ---- Project name in the top bar, page title ----
+function syncProjName() {
+  const b = $('#projName'), has = !!(proj && doc), name = has ? proj.name || 'Untitled' : '';
+  if (b && b._n !== name) { b._n = name; b.hidden = !has; b.innerHTML = has ? `<span>${esc(name)}</span>${svgIc('edit')}` : ''; }
+  document.title = has ? name + ' - Plan Measure' : 'Plan Measure - PDF plan viewer and takeoff';
+}
+$('#projName').onclick = () => $('#saveBtn').click();
+
+// ---- Autosave indicator in the status strip ----
+function setSaveState(st, msg, when) {
+  const el = $('#saveState'); if (!el) return;
+  el.className = st === 'ok' ? '' : st;
+  el.textContent = st === 'pending' ? 'Saving…' : st === 'err' ? 'Not saved' : 'Saved ' + fmtWhen(when || Date.now()).replace(/^Today /, '').replace(/^Yesterday/, 'yesterday');
+  el.title = st === 'err' ? 'Could not save in this browser: ' + (msg || 'unknown error') : 'Your work is saved in this browser automatically';
+}
+
+// ---- Recent projects on the start screen. Only names and dates live in localStorage, so the list never loads plan files. ----
+function fmtWhen(t) {
+  if (!t) return ''; const d = new Date(t), now = new Date(), day = (a) => new Date(a.getFullYear(), a.getMonth(), a.getDate()).getTime(), diff = Math.round((day(now) - day(d)) / 864e5);
+  const time = d.toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit' });
+  if (diff === 0) return 'Today ' + time; if (diff === 1) return 'Yesterday ' + time;
+  return d.toLocaleDateString('en-CA', d.getFullYear() === now.getFullYear() ? { month: 'short', day: 'numeric' } : { year: 'numeric', month: 'short', day: 'numeric' });
+}
+function recentList() { try { const a = JSON.parse(localStorage.getItem('pm-recent') || '[]'); return Array.isArray(a) ? a : []; } catch (e) { return []; } }
+function saveRecent(a) { try { localStorage.setItem('pm-recent', JSON.stringify(a.slice(0, 12))); } catch (e) { } }
+function rememberRecent(p, when) { if (!p || !p.id) return; const a = recentList().filter(x => x.id !== p.id); a.unshift({ id: p.id, name: p.name, file: p.fileName || '', n: (p.items || []).length, t: when || Date.now() }); a.sort((x, y) => y.t - x.t); saveRecent(a); }
+function forgetRecent(id) { saveRecent(recentList().filter(x => x.id !== id)); }
+function syncRecentFrom(all) { saveRecent(all.map(p => ({ id: p.id, name: p.name, file: p.fileName || '', n: (p.items || []).length, t: p.updated }))); }
+function renderRecent() {
+  const box = $('#recent'), list = $('#recentList'); if (!box || !list) return;
+  const last = localStorage.getItem('pm-last'), skipLast = !$('#resumeBtn').hidden, a = recentList().filter(x => !(skipLast && x.id === last)).slice(0, 5);
+  box.hidden = !a.length;
+  list.innerHTML = a.map(x => `<button type="button" class="rrow" data-id="${esc(x.id)}">${svgIc('file')}<b>${esc(x.name || x.file || 'Untitled')}</b><small>${x.n} item${x.n === 1 ? '' : 's'}</small><small>${esc(fmtWhen(x.t))}</small></button>`).join('');
+}
+$('#recentList').addEventListener('click', e => { const b = e.target.closest('.rrow'); if (b) openGuarded(b.dataset.id); });
+$('#recentAll').onclick = () => $('#projBtn').click();
+
+// ---- Export menu (desktop) ----
+function closeExportMenu() { const m = $('#exportMenu'); if (!m || m.hidden) return; m.hidden = true; $('#exportBtn').setAttribute('aria-expanded', 'false'); }
+function openExportMenu() {
+  if (!proj) return; closeMoreMenu(); const m = $('#exportMenu'), b = $('#exportBtn'); m.hidden = false;
+  const r = b.getBoundingClientRect(); m.style.top = (r.bottom + 6) + 'px'; m.style.left = Math.max(8, Math.min(innerWidth - m.offsetWidth - 8, r.right - m.offsetWidth)) + 'px';
+  b.setAttribute('aria-expanded', 'true');
+  const f = m.querySelector('button:not([disabled])'); if (f) f.focus({ preventScroll: true });
+}
+$('#exportBtn').onclick = e => { e.stopPropagation(); if ($('#exportMenu').hidden) openExportMenu(); else closeExportMenu(); };
+$('#exportMenu').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; closeExportMenu(); if (b.dataset.proxy) $(b.dataset.proxy).click(); });
+document.addEventListener('click', e => { if (!$('#exportMenu').hidden && !e.target.closest('#exportMenu,#exportBtn')) closeExportMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#exportMenu').hidden) { closeExportMenu(); $('#exportBtn').focus(); } });
+window.addEventListener('resize', closeExportMenu);
+// arrow keys move through menu items
+['#exportMenu', '#moreMenu'].forEach(sel => $(sel).addEventListener('keydown', e => {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return; e.preventDefault();
+  const items = [...$(sel).querySelectorAll('button:not([disabled])')].filter(b => b.offsetParent), i = items.indexOf(document.activeElement);
+  const n = items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]; if (n) n.focus();
+}));
+// items in the More menu that are not proxies close it too
+$('#moreMenu').addEventListener('click', e => { const b = e.target.closest('button.btn'); if (b && !b.dataset.proxy) closeMoreMenu(); });
+
+// ---- Appearance: Auto follows the system, or pin Light / Dark ----
+function themePref() { const t = localStorage.getItem('pm-theme'); return t === 'light' || t === 'dark' ? t : 'system'; }
+function applyTheme() {
+  const p = themePref(), t = p === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : p;
+  document.documentElement.dataset.theme = t; const m = $('#themeColor'); if (m) m.content = t === 'dark' ? '#171c21' : '#f3f4f6';
+  document.querySelectorAll('#themeSeg [data-theme-set]').forEach(b => b.setAttribute('aria-checked', String(b.dataset.themeSet === p)));
+}
+$('#themeSeg').addEventListener('click', e => { const b = e.target.closest('[data-theme-set]'); if (!b) return; if (b.dataset.themeSet === 'system') localStorage.removeItem('pm-theme'); else localStorage.setItem('pm-theme', b.dataset.themeSet); applyTheme(); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', applyTheme);
+applyTheme();
+
+// ---- Quick colours; colour and label changes apply to the run you are drawing ----
+function syncSwatches() { const c = $('#color').value.toLowerCase(); document.querySelectorAll('.swb').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.c === c))); }
+function draftStyle() { if (draft && draft.type !== 'calibrate') { draft.color = $('#color').value; draft.label = $('#label').value.trim(); draw(); } }
+document.querySelectorAll('.swb').forEach(b => b.onclick = () => { $('#color').value = b.dataset.c; syncSwatches(); draftStyle(); });
+$('#color').addEventListener('input', () => { syncSwatches(); draftStyle(); });
+$('#label').addEventListener('input', () => { if (draft && draft.type !== 'calibrate') draft.label = $('#label').value.trim(); });
+syncSwatches();
+
+// ---- Drag a file onto the window to open it ----
+(function () {
+  let depth = 0; const ov = $('#dropOverlay'), zone = $('#dropZone'), hasFiles = e => !!e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
+  const off = () => { depth = 0; ov.hidden = true; zone.classList.remove('over'); };
+  window.addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); depth++; ov.hidden = false; zone.classList.add('over'); });
+  window.addEventListener('dragover', e => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; });
+  window.addEventListener('dragleave', e => { if (!hasFiles(e)) return; if (--depth <= 0) off(); });
+  window.addEventListener('drop', e => { if (!hasFiles(e)) return; e.preventDefault(); off(); const f = e.dataTransfer.files && e.dataTransfer.files[0]; if (!f) return;
+    if (document.body.classList.contains('printmode') && window.PM.exitPrintMode) window.PM.exitPrintMode(); onFile({ target: { files: [f], value: '' } }); });
+})();
+
+// ---- Keyboard shortcut list ----
+$('#keysBtn').onclick = () => { closeMoreMenu(); $('#keysDlg').showModal(); };
+
+syncToolUI(); renderRecent();
+Object.assign(window.PM, { ask, renderRecent, recentList, applyTheme });

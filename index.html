@@ -2,89 +2,196 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
 <title>Plan Measure - PDF plan viewer and takeoff</title>
-<link rel="icon" href="data:,">
+<meta name="description" content="Open PDF, image and CAD plans in the browser. Measure lengths, pipe runs and areas, count fixtures, place sleeves and export the takeoff. Files stay on your device.">
+<meta name="theme-color" id="themeColor" content="#f3f4f6">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Plan Measure">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="manifest" href="manifest.webmanifest">
+<script>try{var t=localStorage.getItem('pm-theme');if(t!=='light'&&t!=='dark')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';document.documentElement.dataset.theme=t;document.getElementById('themeColor').content=t==='dark'?'#171c21':'#f3f4f6';}catch(e){}</script>
+<link rel="preload" href="fonts/barlow-semi-condensed-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/barlow-semi-condensed-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css"></head>
 <body>
 <header id="bar">
-  <label class="btn primary" data-icon="open">Open plan<input id="file" type="file" accept="application/pdf,image/*,.dxf,.dwg,.pmproj" hidden></label>
-  <button id="saveBtn" class="btn" title="Save project" data-icon="save">Save</button>
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#FFC629"/><g fill="none" stroke="#17222D" stroke-linecap="round" stroke-width="2"><path d="M7 7v8M25 7v8M7 11h18"/><path d="M5 13l4-4M23 13l4-4" stroke-width="1.6"/><path d="M7 26v-6M11.5 26v-3M16 26v-6M20.5 26v-3M25 26v-6"/></g></svg>
+    <span class="bname">Plan Measure</span>
+    <button type="button" id="projName" class="pname" title="Rename project" hidden></button>
+  </div>
+  <label class="btn primary" data-icon="open" id="openBtn">Open plan<input id="file" type="file" accept="application/pdf,image/*,.dxf,.dwg,.pmproj" hidden></label>
+  <button id="saveBtn" class="needdoc btn" title="Save project" data-icon="save">Save</button>
   <button id="projBtn" class="btn" title="Saved projects" data-icon="folder">Projects</button>
-  <button id="undoBtn" class="btn icon" data-icon="undo" title="Undo (Ctrl+Z)" disabled></button><button id="redoBtn" class="btn icon" data-icon="redo" title="Redo (Ctrl+Shift+Z / Ctrl+Y)" disabled></button>
-  <span class="sep"></span>
-  <button id="prev" class="btn icon" data-icon="left" title="Previous page"></button><span id="pageInfo">-</span><button id="next" class="btn icon" data-icon="right" title="Next page"></button>
-  <span class="sep"></span>
-  <button id="zoomOut" class="btn icon" data-icon="minus" title="Zoom out"></button><span id="zoomInfo">100%</span><button id="zoomIn" class="btn icon" data-icon="plus" title="Zoom in"></button><button id="fit" class="btn" data-icon="fit" title="Fit page">Fit</button>
-  <span class="sep"></span>
-  <span id="scaleInfo" class="scale" role="button" title="Set scale">Scale: not set</span>
-  <button id="scaleBtn" class="btn" data-icon="ruler">Set scale</button>
-  <select id="units" title="Units"><option value="mm" selected>Millimetres (mm)</option><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select>
-  <span class="sep"></span>
-  <span class="grow"></span><button id="csvBtn" class="btn" data-icon="table">Export CSV</button>
-  <button id="slvCountBtn" class="btn" data-icon="count" title="Sleeve count: totals by size and layer">Sleeve count</button>
+  <span class="sep needdoc"></span>
+  <button id="undoBtn" class="needdoc btn icon" data-icon="undo" title="Undo (Ctrl+Z)" disabled></button><button id="redoBtn" class="needdoc btn icon" data-icon="redo" title="Redo (Ctrl+Shift+Z / Ctrl+Y)" disabled></button>
+  <span class="grow"></span>
+  <button id="slvCountBtn" class="needdoc btn" data-icon="count" title="Sleeve count: totals by size and layer">Sleeve count</button>
   <button id="findBtn" class="btn" data-icon="find" title="Find sleeves drawn in the CAD file">Find sleeves</button>
-  <button id="sleeveCsvBtn" class="btn" data-icon="sleeve" title="Export sleeve schedule CSV">Sleeves CSV</button>
-  <button id="pdfBtn" class="btn" data-icon="download">Export PDF</button>
-  <button id="printBtn" class="btn" data-icon="print" title="Print a selected area of the plan">Print</button>
-  <button id="moreBtn" class="btn icon" data-icon="more" title="More">More</button>
-  <button id="panelBtn" class="btn" data-icon="panel" title="Show/hide takeoff panel">Takeoff</button>
+  <button id="exportBtn" class="needdoc btn" data-icon="export" title="Export the takeoff" aria-haspopup="menu" aria-expanded="false" aria-controls="exportMenu">Export</button>
+  <button id="printBtn" class="needdoc btn" data-icon="print" title="Print a selected area of the plan">Print</button>
+  <span class="sep needdoc"></span>
+  <button id="moreBtn" class="btn icon" data-icon="more" title="More" aria-haspopup="menu" aria-expanded="false" aria-controls="moreMenu">More</button>
+  <button id="panelBtn" class="needdoc btn" data-icon="panel" title="Show/hide takeoff panel">Takeoff</button>
 </header>
-<nav id="tools">
-  <button data-tool="select" data-icon="select" class="tool active" title="Select / edit (V)">Select</button>
-  <button id="slvCountTool" class="tool" data-icon="count" title="Sleeve count">Sleeves</button>
-  <button data-tool="pan" data-icon="hand" class="tool" title="Pan (H)">Pan</button>
-  <button data-tool="calibrate" data-icon="cal" class="tool" title="Calibrate scale with 2 points (K)">Calibrate</button>
-  <button data-tool="line" data-icon="line" class="tool" title="Length (L)">Length</button>
-  <button data-tool="poly" data-icon="poly" class="tool" title="Pipe run / polyline (P)">Pipe run</button>
-  <button data-tool="area" data-icon="area" class="tool" title="Area (A)">Area</button>
-  <button data-tool="count" data-icon="count" class="tool" title="Count fixtures (C)">Count</button>
-  <button data-tool="sleeve" data-icon="sleeve" class="tool" title="Sleeve (E)">Sleeve</button>
-  <button data-tool="origin" data-icon="origin" class="tool" title="Set 0,0 origin (O)">Origin</button>
-  <button data-tool="text" data-icon="text" class="tool" title="Text note (T)">Note</button>
-  <span class="sep"></span><div class="opt"><label>Colour <input id="color" type="color" value="#e53935"></label></div>
-  <div class="opt"><label>Label <input id="label" type="text" placeholder="e.g. WC, 3/4 PEX" size="10"></label></div>
-  <div class="opt sz"><label>Size <select id="sleeveSize"><option>1/2"</option><option>3/4"</option><option>1"</option><option>1-1/2"</option><option>2"</option><option>3"</option><option selected>4"</option><option>6"</option><option>8"</option><option>10"</option><option>12"</option></select></label></div>
-  <div class="opt lp"><button id="snapBtn" class="btn small on" data-icon="snap" title="Snap to drawing (S). Hold Alt to disable">Snap</button><button id="loupeBtn" class="btn small on" data-icon="loupe" title="Magnifier (M)">Loupe</button><select id="loupeMag" title="Magnifier zoom"><option value="2">2x</option><option value="3">3x</option><option value="4" selected>4x</option><option value="6">6x</option><option value="8">8x</option></select></div>
-  <div class="opt calbar"><button id="ptSel" class="btn small" title="Choose point to nudge (Tab)">Point 2</button><button class="btn small nud" data-n="-1,0" title="Nudge left" data-icon="left"></button><button class="btn small nud" data-n="0,-1" title="Nudge up" data-icon="up"></button><button class="btn small nud" data-n="0,1" title="Nudge down" data-icon="down"></button><button class="btn small nud" data-n="1,0" title="Nudge right" data-icon="right"></button><button id="calSetBtn" class="btn small primary" title="Enter the known distance (Enter)">Set distance</button></div>
-  <button id="finishBtn" class="btn small" title="Finish run / area (Enter)">Finish</button>
-  <button id="undoPt" class="btn small" title="Remove last point (Backspace)">Undo point</button>
-  <div class="hint" id="hint">Open a PDF or image plan to start.</div>
-</nav>
-<div id="drawBar"><div id="drawSlot"></div><button id="cancelBtn" class="btn small" data-icon="close">Cancel</button></div>
+
+<div id="exportMenu" class="menu pop" hidden role="menu" aria-label="Export">
+  <button type="button" id="csvBtn" class="btn mitem" data-icon="table" role="menuitem">Takeoff CSV<small>Every item and the totals</small></button>
+  <button type="button" id="sleeveCsvBtn" class="btn mitem" data-icon="sleeve" role="menuitem" title="Export sleeve schedule CSV">Sleeve schedule CSV<small>IDs, sizes, offsets, X/Y, heights</small></button>
+  <button type="button" id="pdfBtn" class="btn mitem" data-icon="download" role="menuitem">Marked-up PDF<small>The plan with your markups and a summary page</small></button>
+  <button type="button" class="btn mitem" data-icon="save" data-proxy="#pmprojBtn" role="menuitem">Project file<small>.pmproj: open it on another device</small></button>
+</div>
+
 <div id="moreBackdrop" hidden></div>
 <div id="moreMenu" hidden role="menu" aria-label="More actions">
   <div class="msheet-handle" aria-hidden="true"></div>
   <div class="mscroll">
-    <div class="msec">
+    <div class="msec mview needdoc">
       <div class="mlabel">View</div>
       <button type="button" class="btn" data-icon="redo" data-proxy="#redoBtn" id="redoMenu">Redo</button>
       <button type="button" class="btn" data-icon="ruler" data-proxy="#scaleBtn">Set scale</button>
       <button type="button" class="btn" data-icon="fit" data-proxy="#fit">Fit page</button>
     </div>
-    <div class="msec">
-      <div class="mlabel">File / Project</div>
-      <button type="button" class="btn" data-icon="save" data-proxy="#saveBtn">Save</button>
-      <button type="button" class="btn" data-icon="folder" data-proxy="#projBtn">Projects</button>
-      <button type="button" class="btn" data-icon="save" id="pmprojBtn">Save project file</button>
-      <label class="mrow">Units <select id="units2"><option value="mm" selected>Millimetres (mm)</option><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select></label>
+    <div class="msec mfile">
+      <div class="mlabel">File and project</div>
+      <button type="button" class="btn mphone needdoc" data-icon="save" data-proxy="#saveBtn">Save</button>
+      <button type="button" class="btn mphone" data-icon="folder" data-proxy="#projBtn">Projects</button>
+      <button type="button" class="btn needdoc" data-icon="save" id="pmprojBtn">Save project file</button>
+      <label class="mrow mphone needdoc">Units <select id="units2"><option value="mm" selected>Millimetres (mm)</option><option value="imp">Feet-inches</option><option value="met">Metric (m)</option></select></label>
     </div>
-    <div class="msec">
+    <div class="msec mphone needdoc">
       <div class="mlabel">Export</div>
       <button type="button" class="btn" data-icon="table" data-proxy="#csvBtn">Export CSV</button>
       <button type="button" class="btn" data-icon="download" data-proxy="#pdfBtn">Export PDF</button>
       <button type="button" class="btn" data-icon="print" data-proxy="#printBtn">Print</button>
     </div>
-    <div class="msec">
+    <div class="msec mphone needdoc">
       <div class="mlabel">Sleeves</div>
       <button type="button" class="btn" data-icon="find" data-proxy="#findBtn">Find sleeves</button>
       <button type="button" class="btn" data-icon="sleeve" data-proxy="#sleeveCsvBtn">Sleeves CSV</button>
     </div>
-    <div class="msec mdanger" id="moreDanger">
+    <div class="msec">
+      <div class="mlabel">Appearance</div>
+      <div class="seg" id="themeSeg" role="radiogroup" aria-label="Theme">
+        <button type="button" role="radio" data-theme-set="system">Auto</button><button type="button" role="radio" data-theme-set="light">Light</button><button type="button" role="radio" data-theme-set="dark">Dark</button>
+      </div>
+      <button type="button" class="btn mdesk" data-icon="keys" id="keysBtn">Keyboard shortcuts</button>
+    </div>
+    <div class="msec mdanger needdoc" id="moreDanger">
       <div class="mlabel">Edit</div>
     </div>
   </div>
 </div>
+
+<main id="main">
+  <nav id="tools" role="toolbar" aria-label="Tools">
+    <button data-tool="select" data-icon="select" data-key="V" class="tool active" title="Select / edit (V)">Select</button>
+    <button id="slvCountTool" class="tool" data-icon="count" title="Sleeve count">Sleeves</button>
+    <button data-tool="pan" data-icon="hand" data-key="H" class="tool" title="Pan (H)">Pan</button>
+    <span class="sep"></span>
+    <button data-tool="calibrate" data-icon="cal" data-key="K" class="tool" title="Calibrate scale with 2 points (K)">Calibrate</button>
+    <span class="sep"></span>
+    <button data-tool="line" data-icon="line" data-key="L" class="tool" title="Length (L)">Length</button>
+    <button data-tool="poly" data-icon="poly" data-key="P" class="tool" title="Pipe run / polyline (P)">Pipe run</button>
+    <button data-tool="area" data-icon="area" data-key="A" class="tool" title="Area (A)">Area</button>
+    <span class="sep"></span>
+    <button data-tool="count" data-icon="count" data-key="C" class="tool" title="Count fixtures (C)">Count</button>
+    <button data-tool="sleeve" data-icon="sleeve" data-key="E" class="tool" title="Sleeve (E)">Sleeve</button>
+    <button data-tool="origin" data-icon="origin" data-key="O" class="tool" title="Set 0,0 origin (O)">Origin</button>
+    <span class="sep"></span>
+    <button data-tool="text" data-icon="text" data-key="T" class="tool" title="Text note (T)">Note</button>
+  </nav>
+
+  <div id="work">
+    <div id="optbar" role="toolbar" aria-label="Tool options">
+      <div id="optTool"><svg class="ic" viewBox="0 0 24 24"></svg><span>Select</span></div>
+      <div id="optOpts">
+        <div class="opt col"><label title="Custom colour">Colour <input id="color" type="color" value="#e53935"></label><span class="swatches" role="group" aria-label="Quick colours"><button type="button" class="swb" data-c="#e53935" style="--c:#e53935" title="Red" aria-label="Red"></button><button type="button" class="swb" data-c="#fb8c00" style="--c:#fb8c00" title="Orange" aria-label="Orange"></button><button type="button" class="swb" data-c="#43a047" style="--c:#43a047" title="Green" aria-label="Green"></button><button type="button" class="swb" data-c="#1e88e5" style="--c:#1e88e5" title="Blue" aria-label="Blue"></button><button type="button" class="swb" data-c="#8e24aa" style="--c:#8e24aa" title="Purple" aria-label="Purple"></button><button type="button" class="swb" data-c="#37474f" style="--c:#37474f" title="Slate" aria-label="Slate"></button></span></div>
+        <div class="opt lab"><label>Label <input id="label" type="text" placeholder="Label, e.g. WC" size="10" autocomplete="off"></label></div>
+        <div class="opt sz"><label>Size <select id="sleeveSize"><option>1/2"</option><option>3/4"</option><option>1"</option><option>1-1/2"</option><option>2"</option><option>3"</option><option selected>4"</option><option>6"</option><option>8"</option><option>10"</option><option>12"</option></select></label></div>
+        <div class="opt lp"><button id="snapBtn" class="btn small on" data-icon="snap" title="Snap to drawing (S). Hold Alt to disable" aria-pressed="true">Snap</button><button id="loupeBtn" class="btn small on" data-icon="loupe" title="Magnifier (M)" aria-pressed="true">Loupe</button><select id="loupeMag" title="Magnifier zoom" aria-label="Magnifier zoom"><option value="2">2x</option><option value="3">3x</option><option value="4" selected>4x</option><option value="6">6x</option><option value="8">8x</option></select></div>
+        <div class="opt calbar"><button id="ptSel" class="btn small" title="Choose point to nudge (Tab)">Point 2</button><button class="btn small nud" data-n="-1,0" title="Nudge left" aria-label="Nudge left" data-icon="left"></button><button class="btn small nud" data-n="0,-1" title="Nudge up" aria-label="Nudge up" data-icon="up"></button><button class="btn small nud" data-n="0,1" title="Nudge down" aria-label="Nudge down" data-icon="down"></button><button class="btn small nud" data-n="1,0" title="Nudge right" aria-label="Nudge right" data-icon="right"></button><button id="calSetBtn" class="btn small primary" title="Enter the known distance (Enter)">Set distance</button></div>
+      </div>
+      <span class="grow"></span>
+      <div id="optEnd">
+        <button id="undoPt" class="btn small" data-icon="undo" title="Remove last point (Backspace)">Undo point</button>
+        <button id="finishBtn" class="btn small primary" data-icon="check" title="Finish run / area (Enter)">Finish</button>
+      </div>
+    </div>
+
+    <div id="viewport"><div id="empty">
+      <div class="start">
+        <div class="sheetcard" id="dropZone">
+          <svg class="sheetgrid" viewBox="0 0 320 240" preserveAspectRatio="xMaxYMin meet" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="1.2" stroke-dasharray="10 4 2 4"><path d="M90 34V236M200 34V236M300 34V236M20 92H312M20 182H312"/></g><g fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="90" cy="20" r="11"/><circle cx="200" cy="20" r="11"/><circle cx="300" cy="20" r="11"/></g><g fill="currentColor" font-family="Barlow Semi Condensed, Arial Narrow, sans-serif" font-weight="600" font-size="13" text-anchor="middle"><text x="90" y="24.5">1</text><text x="200" y="24.5">2</text><text x="300" y="24.5">3</text></g><g fill="none" stroke="currentColor" stroke-width="2.2"><path d="M90 92h110v90h100"/></g><g fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="145" cy="137" r="7"/><path d="M135 137h20M145 127v20"/><circle cx="250" cy="137" r="7"/><path d="M240 137h20M250 127v20"/></g></svg>
+          <h1>Open a plan to start measuring</h1>
+          <p>Drop a drawing here, or choose a file. PDF, PNG, JPG, DXF, DWG or a saved .pmproj project.</p>
+          <div class="startbtns">
+            <label class="btn primary bigbtn" data-icon="open">Open plan<input id="file2" type="file" accept="application/pdf,image/*,.dxf,.dwg,.pmproj" hidden></label>
+            <button type="button" id="resumeBtn" class="btn bigbtn" data-icon="clock" hidden>Continue last project</button>
+          </div>
+          <div class="tblock" aria-hidden="true"><span><b>Files</b>Stay on this device</span><span><b>Works with</b>PDF, images, CAD</span></div>
+        </div>
+        <section id="recent" hidden>
+          <div class="recenthead"><h2>Recent projects</h2><button type="button" class="btn small" id="recentAll">All projects</button></div>
+          <div id="recentList"></div>
+        </section>
+      </div>
+    </div><div id="stage"><canvas id="canvas"></canvas><svg id="svg"></svg><div id="printOverlay" hidden>
+      <div id="printBox">
+        <span class="ph nw" data-h="nw"></span><span class="ph ne" data-h="ne"></span>
+        <span class="ph sw" data-h="sw"></span><span class="ph se" data-h="se"></span>
+        <span class="ph n" data-h="n"></span><span class="ph s" data-h="s"></span>
+        <span class="ph w" data-h="w"></span><span class="ph e" data-h="e"></span>
+        <span class="edge n" data-h="n"></span><span class="edge s" data-h="s"></span>
+        <span class="edge w" data-h="w"></span><span class="edge e" data-h="e"></span>
+      </div>
+    </div></div></div>
+
+    <footer id="status">
+      <div id="viewCtl">
+        <div class="tb-cell" id="cellSheet"><span class="tb-k">Sheet</span><button id="prev" class="btn icon" data-icon="left" title="Previous page" aria-label="Previous page"></button><span id="pageInfo">-</span><button id="next" class="btn icon" data-icon="right" title="Next page" aria-label="Next page"></button></div>
+        <div class="tb-cell" id="cellZoom"><span class="tb-k">Zoom</span><button id="zoomOut" class="btn icon" data-icon="minus" title="Zoom out" aria-label="Zoom out"></button><span id="zoomInfo">100%</span><button id="zoomIn" class="btn icon" data-icon="plus" title="Zoom in" aria-label="Zoom in"></button><button id="fit" class="btn" data-icon="fit" title="Fit page">Fit</button></div>
+        <div class="tb-cell" id="cellScale"><span class="tb-k">Scale</span><button type="button" id="scaleInfo" class="scale unset" title="Set scale"><svg class="ic" viewBox="0 0 24 24"></svg><span id="scaleVal">Set scale</span></button><button id="scaleBtn" class="btn" data-icon="ruler">Set scale</button></div>
+        <div class="tb-cell" id="cellUnits"><span class="tb-k">Units</span><select id="units" title="Units" aria-label="Units"><option value="mm" selected>mm</option><option value="imp">ft-in</option><option value="met">m</option></select></div>
+      </div>
+      <div class="hint" id="hint">Open a PDF or image plan to start.</div>
+      <div id="saveState" aria-live="polite"></div>
+    </footer>
+  </div>
+
+  <aside id="side" aria-label="Takeoff">
+    <div id="sheetHandle"><span class="grip"></span><span id="sheetSum">Takeoff</span><span class="chev">Show</span></div>
+    <div id="findPanel" hidden><h3>Find sleeves</h3><small id="findSum"></small>
+      <div class="frow"><button type="button" id="findAll" class="btn small">Select all</button><button type="button" id="findNone" class="btn small">Select none</button><button type="button" id="findPick" class="btn small">Pick one</button></div>
+      <div id="findList"></div>
+      <div class="frow fbot"><button type="button" id="findAdd" class="btn primary">Add as sleeves</button><button type="button" id="findCancel" class="btn">Cancel</button></div></div>
+    <section class="sec">
+      <div class="sidehead"><h3>Takeoff totals</h3><button id="panelClose" class="btn icon small" data-icon="close" title="Hide panel" aria-label="Hide panel"></button></div>
+      <div id="totals"></div>
+    </section>
+    <section class="sec" id="layers" hidden><h3>CAD layers <button type="button" id="layersAll" class="btn small">Show all</button></h3><small id="cadInfo"></small><div id="layerList"></div></section>
+    <section class="sec">
+      <div class="sechead"><h3>Items</h3><label class="switch" id="pgOnly"><input type="checkbox" id="pageOnly" checked><span>This page only</span></label></div>
+      <div id="list"></div>
+    </section>
+    <section class="sec" id="edit" hidden>
+      <h3>Edit selected</h3>
+      <label>Label <input id="eLabel" type="text" autocomplete="off"></label>
+      <label class="inl">Colour <input id="eColor" type="color"></label>
+      <label id="eSizeRow" hidden>Size <select id="eSize"><option>1/2"</option><option>3/4"</option><option>1"</option><option>1-1/2"</option><option>2"</option><option>3"</option><option>4"</option><option>6"</option><option>8"</option><option>10"</option><option>12"</option></select></label>
+      <label id="eTextRow">Text <textarea id="eText" rows="2"></textarea></label>
+      <label id="eDropRow">Add to length (drops and fittings) <input id="eExtra" type="text" placeholder="e.g. 600 or 2m" autocomplete="off"></label>
+      <button id="eDel" class="btn danger">Delete</button>
+    </section>
+  </aside>
+
+  <div id="drawBar"><div id="drawSlot"></div><div id="drawEnd"></div><button id="cancelBtn" class="btn small" data-icon="close" title="Cancel">Cancel</button></div>
+</main>
+
 <div id="printBar" hidden>
   <div class="printBarInner">
+    <span class="ptitle">Print area</span>
     <label class="prow">Paper
       <select id="printPaper">
         <option value="letter" selected>Letter</option>
@@ -93,7 +200,7 @@
         <option value="a3">A3</option>
       </select>
     </label>
-    <label class="prow">Orient
+    <label class="prow">Orientation
       <select id="printOrient">
         <option value="auto" selected>Auto</option>
         <option value="landscape">Landscape</option>
@@ -101,8 +208,9 @@
       </select>
     </label>
     <button type="button" id="printRecenterBtn" class="btn" data-icon="fit" title="Fit the whole plan page in view and select it">Fit to page</button>
-    <button type="button" id="printGo" class="btn primary" data-icon="print">Preview</button>
+    <span class="grow"></span>
     <button type="button" id="printCancel" class="btn">Cancel</button>
+    <button type="button" id="printGo" class="btn primary" data-icon="print">Preview</button>
   </div>
 </div>
 <div id="printPreview" hidden>
@@ -114,8 +222,8 @@
     <div id="ppPage"><img id="ppImg" alt="Page preview" draggable="false"></div>
   </div>
   <div class="ppBar">
-    <button type="button" id="ppPrint" class="btn primary" data-icon="print">Print</button>
     <button type="button" id="ppSave" class="btn" data-icon="download">Save PDF</button>
+    <button type="button" id="ppPrint" class="btn primary" data-icon="print">Print</button>
   </div>
 </div>
 <div id="printRoot" aria-hidden="true">
@@ -125,69 +233,58 @@
   </div>
 </div>
 <style id="printPageStyle"></style>
-<main id="main">
-  <div id="viewport"><div id="empty"><div class="emptybox"><svg class="ic big" viewBox="0 0 24 24"><path d="M4 3h11l5 5v13H4z"/><path d="M15 3v5h5M8 13h8M8 17h5"/></svg><h2>Open a plan</h2><p>PDF, image (PNG, JPG) or CAD (DXF, DWG). Your file stays on this device.</p><button type="button" id="resumeBtn" class="btn bigbtn" hidden>Continue last project</button><label class="btn primary bigbtn">Open plan<input id="file2" type="file" accept="application/pdf,image/*,.dxf,.dwg,.pmproj" hidden></label></div></div><div id="stage"><canvas id="canvas"></canvas><svg id="svg"></svg><div id="printOverlay" hidden>
-      <div id="printBox">
-        <span class="ph nw" data-h="nw"></span><span class="ph ne" data-h="ne"></span>
-        <span class="ph sw" data-h="sw"></span><span class="ph se" data-h="se"></span>
-        <span class="ph n" data-h="n"></span><span class="ph s" data-h="s"></span>
-        <span class="ph w" data-h="w"></span><span class="ph e" data-h="e"></span>
-        <span class="edge n" data-h="n"></span><span class="edge s" data-h="s"></span>
-        <span class="edge w" data-h="w"></span><span class="edge e" data-h="e"></span>
-      </div>
-    </div></div></div>
-  <aside id="side">
-    <div id="sheetHandle"><span class="grip"></span><span id="sheetSum">Takeoff</span><span class="chev">Show</span></div>
-    <div id="findPanel" hidden><h3>Find sleeves</h3><small id="findSum"></small>
-      <div class="frow"><button type="button" id="findAll" class="btn small">Select all</button><button type="button" id="findNone" class="btn small">Select none</button><button type="button" id="findPick" class="btn small">Pick one</button></div>
-      <div id="findList"></div>
-      <div class="frow fbot"><button type="button" id="findAdd" class="btn primary">Add as sleeves</button><button type="button" id="findCancel" class="btn">Cancel</button></div></div>
-    <div class="sidehead"><h3>Takeoff totals</h3><button id="panelClose" class="btn icon small" data-icon="close" title="Hide panel"></button></div>
-    <div id="totals"></div>
-    <div id="layers" hidden><h3>CAD layers <button type="button" id="layersAll" class="btn small">Show all</button></h3><small id="cadInfo"></small><div id="layerList"></div></div>
-    <h3>Items <small>(this page: <span id="pgOnly"><input type="checkbox" id="pageOnly" checked></span>)</small></h3>
-    <div id="list"></div>
-    <div id="edit" hidden>
-      <h3>Edit selected</h3>
-      <label>Label <input id="eLabel" type="text"></label>
-      <label>Colour <input id="eColor" type="color"></label>
-      <label id="eSizeRow" hidden>Size <select id="eSize"><option>1/2"</option><option>3/4"</option><option>1"</option><option>1-1/2"</option><option>2"</option><option>3"</option><option>4"</option><option>6"</option><option>8"</option><option>10"</option><option>12"</option></select></label>
-      <label id="eTextRow">Text <textarea id="eText" rows="2"></textarea></label>
-      <label id="eDropRow">Add to length (drops/fittings) <input id="eExtra" type="text" placeholder="e.g. 600 or 2m"></label>
-      <button id="eDel" class="btn danger">Delete</button>
-    </div>
-  </aside>
-</main>
-<dialog id="slvDlg"><form method="dialog">
-  <h3>Sleeve count</h3>
+
+<dialog id="slvDlg" aria-labelledby="slvTitle"><form method="dialog">
+  <h3 id="slvTitle">Sleeve count</h3>
   <div id="slvBody"></div>
   <menu><button type="button" id="slvFind" class="btn">Find sleeves</button><button type="button" id="slvCsv" class="btn">Export sleeves CSV</button><button value="cancel" class="btn primary">Close</button></menu>
 </form></dialog>
-<dialog id="scaleDlg"><form method="dialog">
-  <h3>Set scale for this page</h3>
-  <p>Choose a standard scale, or use the Calibrate tool to click two points of a known distance.</p>
-  <select id="stdScale"></select>
-  <p id="imgDpiRow" hidden>Image resolution (DPI) <input id="imgDpi" type="number" value="150" style="width:6em"></p>
-  <p id="cadUnitRow" hidden>Drawing units <select id="cadUnit"><option value="1">Inches</option><option value="2">Feet</option><option value="4" selected>Millimetres</option><option value="5">Centimetres</option><option value="6">Metres</option></select></p>
-  <label><input type="checkbox" id="allPages"> Apply to all pages</label>
-  <menu><button value="cancel" class="btn">Cancel</button><button id="stdOk" value="ok" class="btn primary">Apply</button></menu>
+<dialog id="scaleDlg" aria-labelledby="scaleTitle"><form method="dialog">
+  <h3 id="scaleTitle">Set scale for this page</h3>
+  <p>Pick the scale printed on the drawing. If the sheet was printed or scanned at another size, calibrate on a known dimension instead.</p>
+  <label class="fld" id="stdScaleRow">Drawing scale <select id="stdScale"></select></label>
+  <p id="imgDpiRow" hidden><label class="fld">Image resolution (DPI) <input id="imgDpi" type="number" value="150"></label></p>
+  <p id="cadUnitRow" hidden><label class="fld">Drawing units <select id="cadUnit"><option value="1">Inches</option><option value="2">Feet</option><option value="4" selected>Millimetres</option><option value="5">Centimetres</option><option value="6">Metres</option></select></label></p>
+  <label class="chk"><input type="checkbox" id="allPages"> Apply to all pages</label>
+  <menu><button type="button" id="calInstead" class="btn" data-icon="cal">Calibrate instead</button><span class="grow"></span><button value="cancel" class="btn">Cancel</button><button id="stdOk" value="ok" class="btn primary">Apply</button></menu>
 </form></dialog>
-<dialog id="calDlg"><form method="dialog">
-  <h3>Known distance</h3>
-  <p>Enter the real length between the two points in <strong>millimetres (mm)</strong>. A bare number is mm. You can also type units, e.g. <code>5000</code>, <code>5000mm</code>, <code>5m</code>, or <code>12'6"</code>.</p>
+<dialog id="calDlg" aria-labelledby="calTitle"><form method="dialog">
+  <h3 id="calTitle">Known distance</h3>
+  <p>Enter the real length between the two points. A bare number is read as millimetres. You can also type units: <code>5000</code>, <code>5000mm</code>, <code>5m</code> or <code>12'6"</code>.</p>
   <div class="cal-input">
     <input id="calVal" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 5000" aria-label="Known length in millimetres">
     <span class="cal-unit" aria-hidden="true">mm</span>
   </div>
-  <label><input type="checkbox" id="calAll"> Apply to all pages</label>
+  <label class="chk"><input type="checkbox" id="calAll"> Apply to all pages</label>
   <menu><button value="cancel" class="btn">Cancel</button><button value="ok" class="btn primary">Apply</button></menu>
 </form></dialog>
-<dialog id="projDlg"><form method="dialog">
-  <h3>Saved projects (stored in this browser)</h3>
+<dialog id="projDlg" aria-labelledby="projTitle"><form method="dialog">
+  <h3 id="projTitle">Saved projects</h3>
+  <p class="sub">Stored in this browser on this device.</p>
   <div id="projList"></div>
   <menu><button value="cancel" class="btn">Close</button></menu>
 </form></dialog>
-<div id="toast"></div>
+<dialog id="askDlg" aria-labelledby="askTitle"><form method="dialog">
+  <h3 id="askTitle"></h3>
+  <p id="askMsg"></p>
+  <input id="askInput" type="text" autocomplete="off" aria-labelledby="askTitle">
+  <textarea id="askText" rows="3" aria-labelledby="askTitle"></textarea>
+  <menu><button value="cancel" class="btn" id="askCancel">Cancel</button><button value="ok" class="btn primary" id="askOk">OK</button></menu>
+</form></dialog>
+<dialog id="keysDlg" aria-labelledby="keysTitle"><form method="dialog">
+  <h3 id="keysTitle">Keyboard shortcuts</h3>
+  <div class="keys">
+    <div><kbd>V</kbd>Select</div><div><kbd>H</kbd>Pan</div><div><kbd>K</kbd>Calibrate</div><div><kbd>L</kbd>Length</div>
+    <div><kbd>P</kbd>Pipe run</div><div><kbd>A</kbd>Area</div><div><kbd>C</kbd>Count</div><div><kbd>E</kbd>Sleeve</div>
+    <div><kbd>O</kbd>Origin</div><div><kbd>T</kbd>Note</div><div><kbd>S</kbd>Snap on or off</div><div><kbd>M</kbd>Magnifier on or off</div>
+    <div><kbd>Shift</kbd>Hold for straight lines</div><div><kbd>Alt</kbd>Hold to skip snapping</div><div><kbd>Enter</kbd>Finish run or area</div><div><kbd>Backspace</kbd>Remove last point</div>
+    <div><kbd>Tab</kbd>Next point to nudge</div><div><kbd>Arrows</kbd>Nudge the point</div><div><kbd>Delete</kbd>Delete selected</div><div><kbd>Esc</kbd>Cancel or deselect</div>
+    <div><kbd>Ctrl Z</kbd>Undo</div><div><kbd>Ctrl Y</kbd>Redo</div><div><kbd>?</kbd>This list</div>
+  </div>
+  <menu><button value="cancel" class="btn primary">Close</button></menu>
+</form></dialog>
+<div id="dropOverlay" hidden><div>Drop to open</div></div>
+<div id="toast" role="status" aria-live="polite"></div>
 <canvas id="loupe" width="140" height="140"></canvas>
 <script src="lib/pdf.min.js"></script>
 <script src="lib/pdf-lib.min.js"></script>

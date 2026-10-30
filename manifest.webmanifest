@@ -1,0 +1,16 @@
+{
+  "name": "Plan Measure",
+  "short_name": "Plan Measure",
+  "description": "PDF, image and CAD plan viewer for takeoffs: lengths, pipe runs, areas, counts and sleeves.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#c9d0d7",
+  "theme_color": "#f3f4f6",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" },
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
