@@ -252,21 +252,30 @@ function draw() {
   renderList();
 }
 function drawSleeveTargets(g) {
-  // Visible centre dots while a measuring/placing tool is active — sized in screen px, clipped to the view
+  // Viewport-only centre dots (hide when zoomed far out) so 1000+ anchors stay smooth on phone
   if (!doc || !(PLACE.includes(tool) || tool === 'count' || tool === 'sleeve' || tool === 'origin')) return;
   const G = geomCache[page]; if (!G || !G.sleeve || !G.sleeve.n) return;
+  // Hide dots when the whole sheet fits too small — symbols would be noise
+  if (zoom < 0.35) return;
   const vis = (typeof visRect === 'function' ? visRect() : null) || { x0: 0, y0: 0, w: doc.sizes[page].w, h: doc.sizes[page].h };
-  const pad = 40 / zoom, x0 = vis.x0 - pad, y0 = vis.y0 - pad, x1 = vis.x0 + vis.w + pad, y1 = vis.y0 + vis.h + pad;
-  const { xy, n } = G.sleeve, r = 5.5 / zoom, sw = 1.6 / zoom, maxN = 400;
+  const pad = 48 / zoom, x0 = vis.x0 - pad, y0 = vis.y0 - pad, x1 = vis.x0 + vis.w + pad, y1 = vis.y0 + vis.h + pad;
+  const { xy, grid } = G.sleeve, r = 5.5 / zoom, sw = 1.6 / zoom;
   const tg = el('g', { id: 'sleeveTargets', 'pointer-events': 'none' }, g);
+  const c1x = Math.floor(x0 / CELL), c2x = Math.floor(x1 / CELL), c1y = Math.floor(y0 / CELL), c2y = Math.floor(y1 / CELL);
+  const seen = new Set();
   let drawn = 0;
-  for (let i = 0; i < n && drawn < maxN; i++) {
-    const x = xy[2 * i], y = xy[2 * i + 1];
-    if (x < x0 || y < y0 || x > x1 || y > y1) continue;
-    el('circle', { cx: x, cy: y, r: r * 1.7, fill: '#ff6f00', 'fill-opacity': '0.18', stroke: 'none' }, tg);
-    el('circle', { cx: x, cy: y, r, fill: '#fff', stroke: '#ff6f00', 'stroke-width': sw }, tg);
-    el('circle', { cx: x, cy: y, r: r * 0.35, fill: '#ff6f00', stroke: 'none' }, tg);
-    drawn++;
+  const maxDraw = 250; // viewport-capped; never dump all 1000+ into the DOM
+  for (let cx = c1x; cx <= c2x && drawn < maxDraw; cx++) for (let cy = c1y; cy <= c2y && drawn < maxDraw; cy++) {
+    const cell = grid.get(cx + ',' + cy); if (!cell) continue;
+    for (const i of cell) {
+      if (seen.has(i) || drawn >= maxDraw) continue; seen.add(i);
+      const x = xy[2 * i], y = xy[2 * i + 1];
+      if (x < x0 || y < y0 || x > x1 || y > y1) continue;
+      el('circle', { cx: x, cy: y, r: r * 1.7, fill: '#ff6f00', 'fill-opacity': '0.18', stroke: 'none' }, tg);
+      el('circle', { cx: x, cy: y, r, fill: '#fff', stroke: '#ff6f00', 'stroke-width': sw }, tg);
+      el('circle', { cx: x, cy: y, r: r * 0.35, fill: '#ff6f00', stroke: 'none' }, tg);
+      drawn++;
+    }
   }
 }
 
@@ -835,7 +844,10 @@ async function buildGeom(pg) {
   const add = (x1, y1, x2, y2) => { if (n >= MAXS || Math.abs(x1 - x2) + Math.abs(y1 - y2) <= 0.05) return;
     if (4 * n + 4 > sx.length) { const b = new Float64Array(Math.min(4 * MAXS, sx.length * 2)); b.set(sx); sx = b; }
     const o = 4 * n++; sx[o] = x1; sx[o + 1] = y1; sx[o + 2] = x2; sx[o + 3] = y2; };
-  for (let i = 0; i < ops.fnArray.length && n < MAXS; i++) { const fn = ops.fnArray[i], args = ops.argsArray[i];
+  const GEOM_CHUNK = isPhoneDev ? 40000 : 100000;
+  for (let i = 0; i < ops.fnArray.length && n < MAXS; i++) {
+    if (i && (i % GEOM_CHUNK) === 0) await new Promise(r => setTimeout(r, 0));
+    const fn = ops.fnArray[i], args = ops.argsArray[i];
     if (fn === OPS.save) stack.push(ctm); else if (fn === OPS.restore) { if (stack.length) setCtm(stack.pop()); }
     else if (fn === OPS.transform) setCtm(U.transform(ctm, args));
     else if (fn === OPS.paintFormXObjectBegin) { stack.push(ctm); if (args[0]) setCtm(U.transform(ctm, args[0])); }
@@ -877,7 +889,39 @@ function isOrangePx(r, g, b) {
   const mn = g < b ? g : b, sat = r - mn;
   return sat > 28 && g > 30 && g < 245 && (r - b) > 30;
 }
-function dedupePts(pts, tol) { const out = []; for (const p of pts) { if (!out.some(q => Math.hypot(q[0] - p[0], q[1] - p[1]) < tol)) out.push(p); } return out; }
+function dedupePts(pts, tol) {
+  // Spatial-hash dedupe — O(n) for the 1000+ orange path centres on a full sleeving sheet
+  if (!pts.length) return [];
+  const cell = Math.max(tol, 1e-6), grid = new Map(), out = [];
+  for (const p of pts) {
+    const ix = Math.floor(p[0] / cell), iy = Math.floor(p[1] / cell);
+    let hit = false;
+    for (let dx = -1; dx <= 1 && !hit; dx++) for (let dy = -1; dy <= 1 && !hit; dy++) {
+      const arr = grid.get((ix + dx) + ',' + (iy + dy)); if (!arr) continue;
+      for (const q of arr) if (Math.hypot(q[0] - p[0], q[1] - p[1]) < tol) { hit = true; break; }
+    }
+    if (hit) continue;
+    out.push(p);
+    const k = ix + ',' + iy; let c = grid.get(k); if (!c) grid.set(k, c = []); c.push(p);
+  }
+  return out;
+}
+function isOrangePdfColor(c) {
+  // pdf.js setFill/StrokeRGBColor is 0..255; some paths may still be 0..1
+  if (!c || c.length < 3) return false;
+  let r = +c[0], g = +c[1], b = +c[2];
+  if (r <= 1 && g <= 1 && b <= 1) { r *= 255; g *= 255; b *= 255; }
+  // Exclude magenta slab hatch (173,20,87) — dense floor fill, not firestop markers
+  if (Math.abs(r - 173) < 8 && g < 40 && Math.abs(b - 87) < 20) return false;
+  if (Math.abs(r - 204) < 8 && g < 40 && Math.abs(b - 128) < 20) return false;
+  // Red-orange CAD markers (229,57,53), amber/gold Hilti (184,160,0), broad orange
+  if (r >= 150 && b <= 170 && r > g - 5) {
+    const mn = g < b ? g : b, sat = r - mn;
+    if (sat > 28 && g > 30 && g < 245 && (r - b) > 30) return true;
+  }
+  if (r > 160 && g > 120 && g < 200 && b < 60 && r >= g - 5) return true;
+  return false;
+}
 function sleeveGridAdd(grid, i, x, y) { const k = Math.floor(x / CELL) + ',' + Math.floor(y / CELL); let c = grid.get(k); if (!c) grid.set(k, c = []); c.push(i); }
 function buildSleeveIndex(G, pts) {
   const tol = 1e-4 * Math.max(doc.sizes[page].w, doc.sizes[page].h);
@@ -968,25 +1012,114 @@ function scanOrangeFromPix(G) {
   const { width: W, height: Hh, data } = G.pix;
   return clusterOrange(data, W, Hh, 1, 4, 2500);
 }
-async function scanOrangeFromPdf(pg) {
+async function scanOrangeFromPdfOps(pg) {
+  // Resolution-independent: orange fill/stroke path centres from the pdf.js operator list
+  let page, ops;
+  try { page = await doc.pdf.getPage(pg); ops = cachedOps(page) || await page.getOperatorList(); }
+  catch (e) { return []; }
+  if (!ops || !ops.fnArray || !ops.fnArray.length) return [];
+  const vp = doc.vps[pg], OPS = pdfjsLib.OPS, U = pdfjsLib.Util;
+  let fill = null, stroke = null, ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm);
+  const stack = [];
+  const setCtm = m => { ctm = m; M = U.transform(vp.transform, m); };
+  const xform = (x, y) => { const [a, b, c, d, e, f] = M; return [a * x + c * y + e, b * x + d * y + f]; };
+  let pathPts = [];
+  const raw = [];
+  const flush = (col) => {
+    if (pathPts.length < 1) { pathPts = []; return; }
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9, sx = 0, sy = 0;
+    for (let i = 0; i < pathPts.length; i++) {
+      const x = pathPts[i][0], y = pathPts[i][1];
+      if (x < x0) x0 = x; if (y < y0) y0 = y; if (x > x1) x1 = x; if (y > y1) y1 = y;
+      sx += x; sy += y;
+    }
+    const n = pathPts.length, bw = x1 - x0, bh = y1 - y0;
+    pathPts = [];
+    const span = bw > bh ? bw : bh;
+    if (span < 0.25 || span > 48) return; // drop degenerate / title-block rules
+    if ((bw > 28 && bh < 0.8) || (bh > 28 && bw < 0.8)) return;
+    raw.push([sx / n, sy / n]);
+  };
+  const CHUNK = isPhoneDev ? 25000 : 60000;
+  for (let i = 0; i < ops.fnArray.length; i++) {
+    if (i && (i % CHUNK) === 0) await new Promise(r => setTimeout(r, 0)); // keep UI alive on big CAD sheets
+    const fn = ops.fnArray[i], args = ops.argsArray[i];
+    if (fn === OPS.save) stack.push({ ctm, fill, stroke });
+    else if (fn === OPS.restore) { const s = stack.pop(); if (s) { setCtm(s.ctm); fill = s.fill; stroke = s.stroke; } }
+    else if (fn === OPS.transform) setCtm(U.transform(ctm, args));
+    else if (fn === OPS.paintFormXObjectBegin) { stack.push({ ctm, fill, stroke }); if (args && args[0]) setCtm(U.transform(ctm, args[0])); }
+    else if (fn === OPS.paintFormXObjectEnd) { const s = stack.pop(); if (s) { setCtm(s.ctm); fill = s.fill; stroke = s.stroke; } }
+    else if (fn === OPS.setFillRGBColor) fill = args;
+    else if (fn === OPS.setStrokeRGBColor) stroke = args;
+    else if (fn === OPS.constructPath) {
+      const sub = args[0], co = args[1]; let j = 0;
+      for (const op of sub) {
+        if (op === OPS.moveTo) { pathPts.push(xform(co[j], co[j + 1])); j += 2; }
+        else if (op === OPS.lineTo) { pathPts.push(xform(co[j], co[j + 1])); j += 2; }
+        else if (op === OPS.curveTo) { pathPts.push(xform(co[j + 4], co[j + 5])); j += 6; }
+        else if (op === OPS.curveTo2 || op === OPS.curveTo3) { pathPts.push(xform(co[j + 2], co[j + 3])); j += 4; }
+        else if (op === OPS.rectangle) {
+          const x = co[j], y = co[j + 1], w = co[j + 2], h = co[j + 3]; j += 4;
+          pathPts.push(xform(x, y), xform(x + w, y), xform(x + w, y + h), xform(x, y + h));
+        }
+      }
+    } else if (fn === OPS.fill || fn === OPS.eoFill) {
+      if (isOrangePdfColor(fill)) flush(fill); else pathPts = [];
+    } else if (fn === OPS.stroke || fn === OPS.closeStroke) {
+      if (isOrangePdfColor(stroke)) flush(stroke); else pathPts = [];
+    } else if (fn === OPS.fillStroke || fn === OPS.eoFillStroke || fn === OPS.closeFillStroke || fn === OPS.closeEOFillStroke) {
+      if (isOrangePdfColor(fill) || isOrangePdfColor(stroke)) flush(isOrangePdfColor(fill) ? fill : stroke); else pathPts = [];
+    } else if (fn === OPS.endPath) pathPts = [];
+  }
+  // Light dedupe only (keep ~all path centres so a full sheet yields 1000+)
   const { w, h } = doc.sizes[pg];
-  // Higher budget so small CAD firestop diamonds survive anti-aliasing on phone
-  const maxPx = isPhoneDev ? 3.5e6 : 6e6; let r = Math.min(1.5, Math.sqrt(maxPx / (w * h)));
-  // Prefer the already-drawn base bitmap when it covers the page at useful res.
-  if (base._ok && base._key === viewKey() && base._r > 0.25) {
+  return dedupePts(raw, Math.max(1.2, 5e-4 * Math.max(w, h)));
+}
+async function scanOrangeFromPdfRasterTiled(pg) {
+  // Fallback for image-only plans: tile at high res, cluster per tile, release canvases
+  const { w, h } = doc.sizes[pg];
+  const maxPx = isPhoneDev ? 2.5e6 : 5e6;
+  // Target ~2.5–4 CSS px per diamond edge on a dense sheet
+  let r = Math.min(2.5, Math.sqrt(maxPx / Math.max(1, (w * h) / 16))); // tile budget ≈ maxPx; 4×4 tiles
+  const tilesX = w * r > 1800 ? 4 : (w * r > 900 ? 2 : 1);
+  const tilesY = h * r > 1800 ? 4 : (h * r > 900 ? 2 : 1);
+  const pts = [];
+  for (let ty = 0; ty < tilesY; ty++) for (let tx = 0; tx < tilesX; tx++) {
+    await new Promise(res => setTimeout(res, 0));
+    const x0 = (w * tx) / tilesX, y0 = (h * ty) / tilesY;
+    const tw = w / tilesX, th = h / tilesY;
+    const cw = Math.max(1, Math.ceil(tw * r)), ch = Math.max(1, Math.ceil(th * r));
+    const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    const job = { dead: false };
+    try { await paintRegion(ctx, cw, ch, { x0, y0, w: tw, h: th }, r, job); }
+    catch (e) { c.width = c.height = 0; continue; }
+    let data;
+    try { data = ctx.getImageData(0, 0, cw, ch).data; } catch (e) { c.width = c.height = 0; continue; }
+    const local = clusterOrange(data, cw, ch, 1 / r, 3, 2500);
+    for (const p of local) pts.push([p[0] + x0, p[1] + y0]);
+    c.width = c.height = 0; // release
+  }
+  return dedupePts(pts, Math.max(2, 8e-4 * Math.max(w, h)));
+}
+async function scanOrangeFromPdf(pg) {
+  // Prefer vector ops (full CAD sheets); fall back to tiled raster for image plans / sparse ops
+  const vec = await scanOrangeFromPdfOps(pg);
+  if (vec.length >= 20) return vec;
+  // Few vector hits: try base bitmap then tiled high-res raster
+  if (base._ok && base._key === viewKey() && base._r > 0.35) {
     try {
       const ctx = base.getContext('2d', { willReadFrequently: true });
       const { width: W, height: Hh } = base; const data = ctx.getImageData(0, 0, W, Hh).data;
-      return clusterOrange(data, W, Hh, 1 / base._r, 3, 2500);
-    } catch (e) { /* fall through to one-shot scan */ }
+      const fromBase = clusterOrange(data, W, Hh, 1 / base._r, 3, 2500);
+      if (fromBase.length >= vec.length) {
+        const tiled = fromBase.length >= 20 ? fromBase : await scanOrangeFromPdfRasterTiled(pg);
+        return tiled.length >= fromBase.length ? tiled : fromBase;
+      }
+    } catch (e) { /* fall through */ }
   }
-  const cw = Math.max(1, Math.ceil(w * r)), ch = Math.max(1, Math.ceil(h * r));
-  const c = document.createElement('canvas'); c.width = cw; c.height = ch;
-  const ctx = c.getContext('2d', { willReadFrequently: true });
-  const job = { dead: false }; try { await paintRegion(ctx, cw, ch, { x0: 0, y0: 0, w, h }, r, job); }
-  catch (e) { c.width = c.height = 0; return []; }
-  const data = ctx.getImageData(0, 0, cw, ch).data; const pts = clusterOrange(data, cw, ch, 1 / r, 3, 2500);
-  c.width = c.height = 0; return pts;
+  const tiled = await scanOrangeFromPdfRasterTiled(pg);
+  return tiled.length >= vec.length ? tiled : vec;
 }
 async function ensureSleeveSnap(pg) {
   const G = await buildGeom(pg); if (!G.ready) return G;
@@ -1077,8 +1210,17 @@ let wallExt = null; // { a:[x,y], b:[x,y] } fictional wall continuation while ai
 function findSnap(p, r, exclude, opts) {
   const G = geomCache[page]; let best = null; const consider = (q, kind, pri) => { const d = dist(p, q); if (d <= r && (!best || pri < best.pri || (pri === best.pri && d < best.d))) best = { p: q, kind, pri, d }; };
   opts = opts || {};
-  // 1) Sleeve centres / orange anchors — highest priority within the snap radius (win over nearby lines)
-  if (G && G.sleeve) for (const q of nearSleevePts(G, p, r)) consider(q, 'sleeve', -1);
+  // 1) Sleeve centres / orange anchors — highest priority; local cluster → diamond centre
+  if (G && G.sleeve) {
+    const near = nearSleevePts(G, p, r);
+    if (near.length) {
+      let bq = near[0], bd = dist(p, near[0]);
+      for (let i = 1; i < near.length; i++) { const d = dist(p, near[i]); if (d < bd) { bd = d; bq = near[i]; } }
+      const cr = Math.max(6, r * 0.45); let sx = 0, sy = 0, n = 0;
+      for (const q of near) if (Math.hypot(q[0] - bq[0], q[1] - bq[1]) <= cr) { sx += q[0]; sy += q[1]; n++; }
+      consider(n >= 2 ? [sx / n, sy / n] : bq, 'sleeve', -1);
+    }
+  }
   // 2) Perpendicular foot when measuring from a sleeve centre — always lock (never free in empty space)
   if (opts.perpFrom) {
     const hit = nearestPerpWall(opts.perpFrom, p, Math.max(r * 20, Math.max(doc.sizes[page].w, doc.sizes[page].h)));
