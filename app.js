@@ -866,7 +866,17 @@ function projSeg(p, s) { const dx = s[2] - s[0], dy = s[3] - s[1], L2 = dx * dx 
 function segX(a, b) { const d = (a[2] - a[0]) * (b[3] - b[1]) - (a[3] - a[1]) * (b[2] - b[0]); if (Math.abs(d) < 1e-9) return null;
   const t = ((b[0] - a[0]) * (b[3] - b[1]) - (b[1] - a[1]) * (b[2] - b[0])) / d, u = ((b[0] - a[0]) * (a[3] - a[1]) - (b[1] - a[1]) * (a[2] - a[0])) / d;
   if (t < -1e-6 || t > 1 + 1e-6 || u < -1e-6 || u > 1 + 1e-6) return null; return [a[0] + t * (a[2] - a[0]), a[1] + t * (a[3] - a[1])]; }
-function isOrangePx(r, g, b) { return r > 200 && g > 90 && g < 230 && b < 130 && r > g + 30 && g > b + 30; }
+function isOrangeCore(r, g, b) {
+  // Strong orange / amber seed (Hilti 6", CAD firestop diamond, bow-tie flags)
+  return r > 185 && g > 55 && g < 230 && b < 145 && r > g + 25 && (r - b) > 50 && g >= b - 10;
+}
+function isOrangePx(r, g, b) {
+  // Broad orange-ish: cores + anti-aliased fringes (fill or stroke, vector or raster)
+  if (r < 150 || b > 170) return false;
+  if (r <= g - 5) return false;
+  const mn = g < b ? g : b, sat = r - mn;
+  return sat > 28 && g > 30 && g < 245 && (r - b) > 30;
+}
 function dedupePts(pts, tol) { const out = []; for (const p of pts) { if (!out.some(q => Math.hypot(q[0] - p[0], q[1] - p[1]) < tol)) out.push(p); } return out; }
 function sleeveGridAdd(grid, i, x, y) { const k = Math.floor(x / CELL) + ',' + Math.floor(y / CELL); let c = grid.get(k); if (!c) grid.set(k, c = []); c.push(i); }
 function buildSleeveIndex(G, pts) {
@@ -884,36 +894,90 @@ function collectCadSleevePts() {
   return out;
 }
 function clusterOrange(data, W, H, scale, minN, maxN) {
-  // scale: page units per pixel; mark visited in a Uint8Array
-  const seen = new Uint8Array(W * H), pts = [];
-  const isO = i => { const o = i * 4; return isOrangePx(data[o], data[o + 1], data[o + 2]); };
+  // Two-threshold flood (core seed → broad expand) so AA gaps don't split a symbol.
+  // Then merge nearby blobs (flags + diamond + tiny label) into one anchor whose
+  // centre is the largest blob's centroid (the diamond / marker body).
+  const seen = new Uint8Array(W * H), raw = [];
+  const at = i => { const o = i * 4; return [data[o], data[o + 1], data[o + 2]]; };
+  const core = i => { const [r, g, b] = at(i); return isOrangeCore(r, g, b); };
+  const soft = i => { const [r, g, b] = at(i); return isOrangePx(r, g, b); };
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-    const i0 = y * W + x; if (seen[i0] || !isO(i0)) continue;
-    let q = [i0], qi = 0, n = 0, sx = 0, sy = 0; seen[i0] = 1;
-    while (qi < q.length && n < maxN * 4) {
+    const i0 = y * W + x; if (seen[i0] || !core(i0)) continue;
+    let q = [i0], qi = 0, n = 0, sx = 0, sy = 0, x0 = x, y0 = y, x1 = x, y1 = y;
+    seen[i0] = 1;
+    const rowN = new Map(), rowSx = new Map();
+    while (qi < q.length && n < maxN * 8) {
       const i = q[qi++], px = i % W, py = (i - px) / W; n++; sx += px; sy += py;
+      rowN.set(py, (rowN.get(py) || 0) + 1); rowSx.set(py, (rowSx.get(py) || 0) + px);
+      if (px < x0) x0 = px; if (py < y0) y0 = py; if (px > x1) x1 = px; if (py > y1) y1 = py;
       for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
         if (!dx && !dy) continue; const nx = px + dx, ny = py + dy; if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
-        const j = ny * W + nx; if (seen[j] || !isO(j)) continue; seen[j] = 1; q.push(j); } }
-    if (n >= minN && n <= maxN) pts.push([(sx / n + 0.5) * scale, (sy / n + 0.5) * scale]);
+        const j = ny * W + nx; if (seen[j] || !soft(j)) continue; seen[j] = 1; q.push(j); } }
+    if (n < minN || n > maxN * 8) continue;
+    // Densest horizontal band ≈ diamond / square body (flags & labels are thinner)
+    const band = Math.max(1, Math.round((y1 - y0 + 1) * 0.18));
+    let bestC = -1, cx = sx / n + 0.5, cy = sy / n + 0.5;
+    for (let yy = y0; yy <= y1; yy++) {
+      let c = 0, sxx = 0;
+      for (let dy = -band; dy <= band; dy++) {
+        const y2 = yy + dy; if (!rowN.has(y2)) continue;
+        c += rowN.get(y2); sxx += rowSx.get(y2);
+      }
+      if (c > bestC) { bestC = c; cy = yy + 0.5; cx = c ? sxx / c + 0.5 : cx; }
+    }
+    raw.push({ n, cx, cy, x0, y0, x1, y1 });
+  }
+  // Merge parts of one symbol (bow-tie flags above diamond, size label beside it)
+  const mergePx = Math.max(14, Math.round(22 * Math.min(1, Math.sqrt((W * H) / 1e6))));
+  const used = new Uint8Array(raw.length), pts = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (used[i]) continue;
+    const group = [raw[i]]; used[i] = 1;
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let j = 0; j < raw.length; j++) if (!used[j]) {
+        const b = raw[j];
+        for (const a of group) {
+          const gapX = Math.max(0, Math.max(a.x0, b.x0) - Math.min(a.x1, b.x1));
+          const gapY = Math.max(0, Math.max(a.y0, b.y0) - Math.min(a.y1, b.y1));
+          const near = (gapX <= mergePx && gapY <= mergePx) || Math.hypot(a.cx - b.cx, a.cy - b.cy) <= mergePx * 1.4;
+          if (near) { group.push(b); used[j] = 1; changed = true; break; }
+        }
+      }
+    }
+    let tot = 0, bx0 = 1e9, by0 = 1e9, bx1 = 0, by1 = 0, best = group[0];
+    for (const g of group) {
+      tot += g.n; if (g.n > best.n) best = g;
+      if (g.x0 < bx0) bx0 = g.x0; if (g.y0 < by0) by0 = g.y0;
+      if (g.x1 > bx1) bx1 = g.x1; if (g.y1 > by1) by1 = g.y1;
+    }
+    const bw = bx1 - bx0 + 1, bh = by1 - by0 + 1;
+    // Reject long thin orange lines / title-block rules; keep compact markers
+    if (tot < minN) continue;
+    if (bw > 90 && bh < 8) continue;
+    if (bh > 90 && bw < 8) continue;
+    if (bw * bh > 12000 && tot < bw * bh * 0.08) continue;
+    // Centre on the largest body (diamond / square fill), not the label or flags alone
+    pts.push([best.cx * scale, best.cy * scale]);
   }
   return pts;
 }
 function scanOrangeFromPix(G) {
   if (!G.pix) return [];
   const { width: W, height: Hh, data } = G.pix;
-  // downsample for speed on large images: walk every 2nd pixel via clustering still visits neighbors
-  return clusterOrange(data, W, Hh, 1, 4, 400);
+  return clusterOrange(data, W, Hh, 1, 4, 2500);
 }
 async function scanOrangeFromPdf(pg) {
   const { w, h } = doc.sizes[pg];
-  const maxPx = isPhoneDev ? 1.5e6 : 3e6; let r = Math.min(1.2, Math.sqrt(maxPx / (w * h)));
-  // Prefer the already-drawn base bitmap when it covers the page (no extra canvas).
-  if (base._ok && base._key === viewKey() && base._r > 0.15) {
+  // Higher budget so small CAD firestop diamonds survive anti-aliasing on phone
+  const maxPx = isPhoneDev ? 3.5e6 : 6e6; let r = Math.min(1.5, Math.sqrt(maxPx / (w * h)));
+  // Prefer the already-drawn base bitmap when it covers the page at useful res.
+  if (base._ok && base._key === viewKey() && base._r > 0.25) {
     try {
       const ctx = base.getContext('2d', { willReadFrequently: true });
       const { width: W, height: Hh } = base; const data = ctx.getImageData(0, 0, W, Hh).data;
-      return clusterOrange(data, W, Hh, 1 / base._r, 3, 500);
+      return clusterOrange(data, W, Hh, 1 / base._r, 3, 2500);
     } catch (e) { /* fall through to one-shot scan */ }
   }
   const cw = Math.max(1, Math.ceil(w * r)), ch = Math.max(1, Math.ceil(h * r));
@@ -921,7 +985,7 @@ async function scanOrangeFromPdf(pg) {
   const ctx = c.getContext('2d', { willReadFrequently: true });
   const job = { dead: false }; try { await paintRegion(ctx, cw, ch, { x0: 0, y0: 0, w, h }, r, job); }
   catch (e) { c.width = c.height = 0; return []; }
-  const data = ctx.getImageData(0, 0, cw, ch).data; const pts = clusterOrange(data, cw, ch, 1 / r, 3, 500);
+  const data = ctx.getImageData(0, 0, cw, ch).data; const pts = clusterOrange(data, cw, ch, 1 / r, 3, 2500);
   c.width = c.height = 0; return pts;
 }
 async function ensureSleeveSnap(pg) {
@@ -1056,7 +1120,7 @@ function aim(p, e, prev, exclude) {
   if (snapOn && !e.altKey && doc && proj) {
     if (!geomCache[page]) buildGeom(page);
     // Generous radius so sleeve centre dots are easy to hit on a phone (dots are ~11 CSS px across)
-    const r = (touchR ? 28 : 14) / zoom;
+    const r = (touchR ? 30 : 14) / zoom;
     const fromSleeve = !!(prev && tool === 'line' && isSleeveCentrePt(prev, Math.max(4 / zoom, 1)));
     if (fromSleeve) {
       // Hard lock: second point is always the perpendicular foot in the finger's direction (never empty space)

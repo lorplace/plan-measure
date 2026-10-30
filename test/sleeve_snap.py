@@ -93,6 +93,27 @@ with sync_playwright() as p:
     chk('image no errors ' + str(errs2), not errs2)
     pg.close()
 
+    # --- Diamond/bow-tie orange anchors (CAD firestop style) merge to one centre each ---
+    errs2b = []
+    pg = b.new_page(viewport={'width': 900, 'height': 700})
+    pg.on('pageerror', lambda e: errs2b.append(str(e)))
+    pg.goto(URL)
+    pg.set_input_files('#file', 'test/sample-orange-diamond-anchors.png')
+    pg.wait_for_function('window.PM && PM.doc && PM.proj', timeout=30000)
+    pg.wait_for_timeout(300)
+    pg.evaluate('PMsnap.buildGeom(1).then(()=>PMsnap.ensureSleeveSnap(1))')
+    pg.wait_for_function('PMsnap.geom[1] && PMsnap.geom[1].sleeve', timeout=20000)
+    dia = pg.evaluate("""() => {
+      const G = PMsnap.geom[1], n = G.sleeve ? G.sleeve.n : 0;
+      const hit = PMsnap.findSnap([200, 220], 25, null);
+      return {n, hit: hit && {kind: hit.kind, pri: hit.pri, p: hit.p}};
+    }""")
+    print('diamond', dia)
+    chk('diamond anchors merged to 2 symbols', dia['n'] == 2)
+    chk('diamond centre snaps as sleeve', dia.get('hit') and dia['hit']['kind'] == 'sleeve')
+    chk('diamond no errors ' + str(errs2b), not errs2b)
+    pg.close()
+
     # --- Phone viewport smoke ---
     errs3 = []
     ctx = b.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=3, is_mobile=True, has_touch=True)
@@ -192,7 +213,7 @@ with sync_playwright() as p:
       // pagePt is not exported; check that sleeve snap radius is generous by probing
       const G = PMsnap.geom[1];
       const sx = G.sleeve.xy[0], sy = G.sleeve.xy[1];
-      const hit = PMsnap.findSnap([sx + 18, sy], 28 / PM.zoom, null);
+      const hit = PMsnap.findSnap([sx + 18, sy], 30 / PM.zoom, null);
       return {sleeveHit: !!(hit && hit.kind === 'sleeve'), zoom: PM.zoom};
     }""")
     print('touch snap', off)
