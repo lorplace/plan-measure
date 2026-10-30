@@ -35,8 +35,10 @@ with sync_playwright() as p:
     cdp=ctx.new_cdp_session(pg)
     def T(t,x,y): cdp.send('Input.dispatchTouchEvent',{'type':t,'touchPoints':[] if t=='touchEnd' else [{'x':x,'y':y}]})
     def press_drag(target, start_off, shot=None):
-        tx,ty=scr(*target); T('touchStart',tx+start_off[0],ty+start_off[1])
-        for i in range(1,11): T('touchMove',tx+start_off[0]*(1-i/10),ty+start_off[1]*(1-i/10)); pg.wait_for_timeout(20)
+        # Finger sits 72 CSS px below the aim point while dragging
+        AIM_UP=72; tx,ty=scr(*target); fx,fy=tx, ty+AIM_UP
+        T('touchStart',fx+start_off[0],fy+start_off[1])
+        for i in range(1,11): T('touchMove',fx+start_off[0]*(1-i/10),fy+start_off[1]*(1-i/10)); pg.wait_for_timeout(20)
         pg.wait_for_timeout(300)
         if shot:
             pg.wait_for_function("document.querySelector('#loupe').dataset.sharp==='1'",timeout=5000); chk('phone loupe visible during drag', pg.is_visible('#loupe')); pg.screenshot(path=shot)

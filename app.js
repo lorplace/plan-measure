@@ -246,9 +246,28 @@ function draw() {
   svg.innerHTML = ''; if (!proj) return;
   const g = el('g', {}, svg);
   proj.items.filter(i => i.page === page).forEach(i => drawItem(i, g));
+  drawSleeveTargets(g);
   if (draft) { const full = draft.type === 'calibrate' && draft.pts.length === 2; const pts = hover && !full ? draft.pts.concat([hover]) : draft.pts; if (pts.length) { const ext = wallExt ? [wallExt.a, wallExt.b] : draft.ext; drawItem({ ...draft, pts, page, label: draft.label, ext }, g, true); }
     const q = draft.pts[calSel]; if (q) el('circle', { cx: q[0], cy: q[1], r: 7 / zoom, fill: 'none', stroke: '#ffb300', 'stroke-width': 2.5 / zoom }, g); }
   renderList();
+}
+function drawSleeveTargets(g) {
+  // Visible centre dots while a measuring/placing tool is active — sized in screen px, clipped to the view
+  if (!doc || !(PLACE.includes(tool) || tool === 'count' || tool === 'sleeve' || tool === 'origin')) return;
+  const G = geomCache[page]; if (!G || !G.sleeve || !G.sleeve.n) return;
+  const vis = (typeof visRect === 'function' ? visRect() : null) || { x0: 0, y0: 0, w: doc.sizes[page].w, h: doc.sizes[page].h };
+  const pad = 40 / zoom, x0 = vis.x0 - pad, y0 = vis.y0 - pad, x1 = vis.x0 + vis.w + pad, y1 = vis.y0 + vis.h + pad;
+  const { xy, n } = G.sleeve, r = 5.5 / zoom, sw = 1.6 / zoom, maxN = 400;
+  const tg = el('g', { id: 'sleeveTargets', 'pointer-events': 'none' }, g);
+  let drawn = 0;
+  for (let i = 0; i < n && drawn < maxN; i++) {
+    const x = xy[2 * i], y = xy[2 * i + 1];
+    if (x < x0 || y < y0 || x > x1 || y > y1) continue;
+    el('circle', { cx: x, cy: y, r: r * 1.7, fill: '#ff6f00', 'fill-opacity': '0.18', stroke: 'none' }, tg);
+    el('circle', { cx: x, cy: y, r, fill: '#fff', stroke: '#ff6f00', 'stroke-width': sw }, tg);
+    el('circle', { cx: x, cy: y, r: r * 0.35, fill: '#ff6f00', stroke: 'none' }, tg);
+    drawn++;
+  }
 }
 
 // ---------- side panel ----------
@@ -320,7 +339,26 @@ function syncToolUI() { const a = document.querySelector('.tool.active'); docume
   if (a) { const ic = a.querySelector('svg'), t = a.querySelector('.t'), o = $('#optTool'); if (o._for !== a) { o.querySelector('svg').innerHTML = ic ? ic.innerHTML : ''; o.querySelector('span').textContent = t ? t.textContent : ''; o._for = a; } } }
 function setTool(t) { tool = t; draft = null; hover = null; document.querySelectorAll('.tool').forEach(b => b.classList.toggle('active', b.dataset.tool === t)); $('#hint').textContent = HINTS[t]; vpEl.style.cursor = t === 'pan' ? 'grab' : t === 'select' ? 'default' : 'crosshair'; draw(); }
 document.querySelectorAll('.tool').forEach(b => b.onclick = () => setTool(b.dataset.tool));
-function pagePt(e) { const r = svg.getBoundingClientRect(); return [(e.clientX - r.left) / zoom, (e.clientY - r.top) / zoom]; }
+const TOUCH_AIM_UP = 72; // CSS px — while dragging, aim sits above the fingertip so it stays visible
+function pagePtRaw(clientX, clientY) { const r = svg.getBoundingClientRect(); return [(clientX - r.left) / zoom, (clientY - r.top) / zoom]; }
+function touchAiming(e) {
+  // Lift only while dragging a measuring point (not on a plain tap), so taps still land under the finger
+  if (!(e && e.pointerType && e.pointerType !== 'mouse')) return false;
+  if (!(PLACE.includes(tool) || tool === 'count' || tool === 'sleeve' || tool === 'origin')) return false;
+  if (gesture && (gesture.kind === 'place' || gesture.kind === 'dpt') && gesture.moved) return true;
+  return false;
+}
+function pagePt(e, forceLift) {
+  let cx = e.clientX, cy = e.clientY;
+  if (forceLift === true || (forceLift !== false && touchAiming(e))) cy -= TOUCH_AIM_UP;
+  return pagePtRaw(cx, cy);
+}
+function aimScreenPt(e, forceLift) {
+  let cx = e.clientX, cy = e.clientY;
+  const lift = forceLift === true || (forceLift !== false && touchAiming(e));
+  if (lift) cy -= TOUCH_AIM_UP;
+  return { x: cx, y: cy, fingerY: e.clientY, lift };
+}
 
 function finishDraft() {
   if (!draft) return;
@@ -337,6 +375,10 @@ function clickAt(p, e) {
   const color = $('#color').value, lab = $('#label').value.trim();
   if (['line', 'poly', 'area', 'calibrate'].includes(tool)) {
     if (!draft) draft = { type: tool, pts: [], color: tool === 'calibrate' ? '#1976d2' : color, label: lab };
+    // From a sleeve centre: second tap finishes a locked perpendicular-to-wall measure (never empty space)
+    if (tool === 'line' && draft.pts.length === 1 && isSleeveCentrePt(draft.pts[0], Math.max(4 / zoom, 1))) {
+      applyToWall(p); return;
+    }
     const prev = draft.pts[draft.pts.length - 1]; p = aim(p, e, prev);
     if (prev && dist(prev, p) < 1e-6) return;
     if (tool === 'calibrate' && draft.pts.length >= 2) return;
@@ -344,6 +386,10 @@ function clickAt(p, e) {
     if (tool === 'line' && draft.pts.length === 2 && wallExt) draft.ext = [wallExt.a.slice(), wallExt.b.slice()];
     if ((tool === 'line' || tool === 'calibrate') && draft.pts.length === 2) {
       if (tool === 'line') finishDraft(); else { calSel = 1; toast('Adjust points if needed (drag, arrows), then Set distance.', 4000); }
+    }
+    // After placing first Length point on a sleeve, tip the user about To wall
+    if (tool === 'line' && draft && draft.pts.length === 1 && isSleeveCentrePt(draft.pts[0], Math.max(4 / zoom, 1))) {
+      syncToWallUi(); toast('Tap To wall, or tap toward a wall — measures perpendicular.', 3500);
     }
     draw();
   } else if (tool === 'count') { p = aim(p, e, null); proj.items.push({ id: uid(), type: 'count', page, pts: [p], color, label: lab }); changed(); }
@@ -395,7 +441,7 @@ function endPointer(e) {
   if (!gesture) return; const g = gesture;
   if (g.kind === 'pinch') { if (pointers.size === 0) gesture = null; return; }
   gesture = null;
-  if (g.kind === 'place') { hideLoupe(); hover = null; if (e.type === 'pointerup') clickAt(pagePt(e), e); else draw(); return; }
+  if (g.kind === 'place') { hideLoupe(); hover = null; if (e.type === 'pointerup') clickAt(pagePt(e, !!g.moved), e); else draw(); return; }
   if (g.kind === 'dpt') { if (e.pointerType !== 'mouse') hideLoupe(); draw(); return; }
   if (g.kind === 'vertex' || g.kind === 'move') { changed(); return; }
   if (g.kind === 'pan') { if (g.desel && !g.moved) { selId = null; draw(); } return; }
@@ -613,8 +659,13 @@ function showLoupe(p, e) {
   const dpr = window.devicePixelRatio || 1, L = Math.round(LSZ * dpr);
   if (lc.width !== L) { lc.width = L; lc.height = L; }
   const touch = e.pointerType && e.pointerType !== 'mouse';
-  let x = touch ? e.clientX - LSZ / 2 : e.clientX + 24, y = touch ? e.clientY - LSZ - 60 : e.clientY - LSZ - 24;
-  if (y < 4) y = touch ? e.clientY + 60 : e.clientY + 24; x = Math.max(4, Math.min(innerWidth - LSZ - 4, x));
+  const lifting = touch && (gesture && gesture.moved || e._aimLift);
+  const aim = touch ? aimScreenPt(e, !!lifting) : { x: e.clientX, y: e.clientY, fingerY: e.clientY, lift: false };
+  // Loupe sits above the aim (or finger); when lifting, stay clear of the fingertip
+  let x = touch ? aim.x - LSZ / 2 : e.clientX + 24, y = touch ? aim.y - LSZ - (aim.lift ? 16 : 60) : e.clientY - LSZ - 24;
+  if (y < 4) y = Math.min(innerHeight - LSZ - 4, (touch ? aim.fingerY : e.clientY) + 24);
+  if (touch && aim.lift && y + LSZ > aim.fingerY - 8) y = Math.max(4, aim.fingerY - LSZ - 12);
+  x = Math.max(4, Math.min(innerWidth - LSZ - 4, x));
   if (!touch && x < e.clientX && x + LSZ > e.clientX && y < e.clientY && y + LSZ > e.clientY) x = e.clientX - LSZ - 24;
   lc.style.left = x + 'px'; lc.style.top = y + 'px'; lc.style.display = 'block';
   const mag = +$('#loupeMag').value, S = zoom * mag * dpr; // device px per page unit inside loupe
@@ -700,17 +751,54 @@ function gridAdd(grid, i, x1, y1, x2, y2) {
     for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) { const k = (Math.floor(x / CELL) + dx) + ',' + (Math.floor(y / CELL) + dy); if (seen.has(k)) continue; seen.add(k); let c = grid.get(k); if (!c) grid.set(k, c = []); c.push(i); } }
 }
 function extractAxisSegs(pix) {
+  // Scan axis-aligned dark runs, allowing small gaps so dashed/broken walls become one segment.
   const { width: W, height: Hh, data } = pix, dark = (x, y) => x >= 0 && y >= 0 && x < W && y < Hh && (data[(y * W + x) * 4] * .3 + data[(y * W + x) * 4 + 1] * .59 + data[(y * W + x) * 4 + 2] * .11) < 110;
-  const minL = Math.max(24, 0.03 * Math.min(W, Hh)), segs = [], step = 2;
+  const gap = Math.max(20, Math.round(0.025 * Math.min(W, Hh))); // allow typical dashed-line gaps
+  const minL = Math.max(18, 0.02 * Math.min(W, Hh)), segs = [], step = 2;
   for (let y = 0; y < Hh; y += step) {
     let x = 0; while (x < W) {
-      while (x < W && !dark(x, y)) x++; if (x >= W) break; const x0 = x; while (x < W && dark(x, y)) x++;
-      if (x - x0 >= minL) segs.push([x0 + 0.5, y + 0.5, x - 0.5, y + 0.5]); } }
+      while (x < W && !dark(x, y)) x++; if (x >= W) break; const x0 = x; let last = x;
+      while (x < W) { if (dark(x, y)) { last = x; x++; continue; } let g = 0; while (x + g < W && g < gap && !dark(x + g, y)) g++; if (g >= gap || x + g >= W) break; x += g; }
+      x = last + 1; if (last - x0 + 1 >= minL) segs.push([x0 + 0.5, y + 0.5, last + 0.5, y + 0.5]); } }
   for (let x = 0; x < W; x += step) {
     let y = 0; while (y < Hh) {
-      while (y < Hh && !dark(x, y)) y++; if (y >= Hh) break; const y0 = y; while (y < Hh && dark(x, y)) y++;
-      if (y - y0 >= minL) segs.push([x + 0.5, y0 + 0.5, x + 0.5, y - 0.5]); } }
-  return segs;
+      while (y < Hh && !dark(x, y)) y++; if (y >= Hh) break; const y0 = y; let last = y;
+      while (y < Hh) { if (dark(x, y)) { last = y; y++; continue; } let g = 0; while (y + g < Hh && g < gap && !dark(x, y + g)) g++; if (g >= gap || y + g >= Hh) break; y += g; }
+      y = last + 1; if (last - y0 + 1 >= minL) segs.push([x + 0.5, y0 + 0.5, x + 0.5, last + 0.5]); } }
+  return mergeCollinearSegs(segs, Math.max(gap * 2, 12), 2);
+}
+function mergeCollinearSegs(segs, gapTol, axisTol) {
+  // Merge nearly-collinear axis-aligned pieces across gaps into longer virtual walls.
+  const H = [], V = [];
+  for (const s of segs) {
+    const dx = Math.abs(s[2] - s[0]), dy = Math.abs(s[3] - s[1]);
+    if (dx >= dy) H.push([Math.min(s[0], s[2]), (s[1] + s[3]) / 2, Math.max(s[0], s[2]), (s[1] + s[3]) / 2]);
+    else V.push([(s[0] + s[2]) / 2, Math.min(s[1], s[3]), (s[0] + s[2]) / 2, Math.max(s[1], s[3])]);
+  }
+  const merge = (arr, horiz) => {
+    arr.sort((a, b) => horiz ? (a[1] - b[1] || a[0] - b[0]) : (a[0] - b[0] || a[1] - b[1]));
+    const out = [];
+    for (const s of arr) {
+      const last = out[out.length - 1];
+      if (last && Math.abs((horiz ? last[1] - s[1] : last[0] - s[0])) <= axisTol) {
+        const a0 = horiz ? last[0] : last[1], a1 = horiz ? last[2] : last[3];
+        const b0 = horiz ? s[0] : s[1], b1 = horiz ? s[2] : s[3];
+        if (b0 <= a1 + gapTol && b1 >= a0 - gapTol) {
+          if (horiz) { last[0] = Math.min(a0, b0); last[2] = Math.max(a1, b1); last[1] = last[3] = (last[1] + s[1]) / 2; }
+          else { last[1] = Math.min(a0, b0); last[3] = Math.max(a1, b1); last[0] = last[2] = (last[0] + s[0]) / 2; }
+          continue;
+        }
+      }
+      out.push(s.slice());
+    }
+    return out;
+  };
+  return merge(H, true).concat(merge(V, false));
+}
+function installWallIndex(G, segs) {
+  const merged = mergeCollinearSegs(segs.map(s => s.slice(0, 4)), Math.max(28, 0.03 * Math.min(doc.sizes[page].w, doc.sizes[page].h)), Math.max(3, 0.003 * Math.min(doc.sizes[page].w, doc.sizes[page].h)));
+  G.wallPx = new Float64Array(merged.length * 4); G.wallN = merged.length; G.wallGrid = new Map();
+  for (let i = 0; i < merged.length; i++) { const o = 4 * i, s = merged[i]; G.wallPx[o] = s[0]; G.wallPx[o + 1] = s[1]; G.wallPx[o + 2] = s[2]; G.wallPx[o + 3] = s[3]; gridAdd(G.wallGrid, i, s[0], s[1], s[2], s[3]); }
 }
 async function buildGeom(pg) {
   if (geomCache[pg]) return geomCache[pg];
@@ -725,11 +813,13 @@ async function buildGeom(pg) {
     const sx = M.sx, idx = Uint32Array.from(ids); G.cad = { sx, idx, sK: M.sK, sL: M.sL }; G.segs = new Proxy({ length: idx.length }, { get: (o, k) => k === 'length' ? idx.length : (typeof k === 'string' && /^\d+$/.test(k)) ? (j => [sx[4 * j], sx[4 * j + 1], sx[4 * j + 2], sx[4 * j + 3], M.sK[j], M.sL[j]])(idx[+k]) : undefined });
     const KN = ['end', 'mid', 'center']; G.pts = { get: i => [M.px[2 * i], M.px[2 * i + 1], KN[M.pK[i]]] };
     for (let i = 0; i < M.nPts; i++) if (!hidL[M.pL[i]]) { const k = Math.floor(M.px[2 * i] / CELL) + ',' + Math.floor(M.px[2 * i + 1] / CELL); let c = G.pgrid.get(k); if (!c) G.pgrid.set(k, c = []); c.push(i); }
-    for (let i = 0; i < idx.length; i++) { const j = idx[i]; gridAdd(G.grid, i, sx[4 * j], sx[4 * j + 1], sx[4 * j + 2], sx[4 * j + 3]); } G.ready = true; return G; }
+    for (let i = 0; i < idx.length; i++) { const j = idx[i]; gridAdd(G.grid, i, sx[4 * j], sx[4 * j + 1], sx[4 * j + 2], sx[4 * j + 3]); }
+    const raw = []; for (let i = 0; i < idx.length; i++) { const j = idx[i]; if (!M.sK[j]) raw.push([sx[4 * j], sx[4 * j + 1], sx[4 * j + 2], sx[4 * j + 3]]); }
+    installWallIndex(G, raw);
+    G.ready = true; return G; }
   if (d.type === 'image') { const c = document.createElement('canvas'); c.width = d.sizes[1].w; c.height = d.sizes[1].h; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(d.img, 0, 0); G.pix = x.getImageData(0, 0, c.width, c.height); c.width = c.height = 0;
     // Axis-aligned dark runs for perpendicular-to-wall only (keep on-line snap on dark pixels, as before).
-    const segs = extractAxisSegs(G.pix); G.wallPx = new Float64Array(segs.length * 4); G.wallN = segs.length; G.wallGrid = new Map();
-    for (let i = 0; i < segs.length; i++) { const o = 4 * i, s = segs[i]; G.wallPx[o] = s[0]; G.wallPx[o + 1] = s[1]; G.wallPx[o + 2] = s[2]; G.wallPx[o + 3] = s[3]; gridAdd(G.wallGrid, i, s[0], s[1], s[2], s[3]); }
+    installWallIndex(G, extractAxisSegs(G.pix));
     G.ready = true; return G; }
   // Reuse the operator list pdf.js already holds from drawing the page; asking for it again made the worker parse the
   // whole page a second time and kept a second copy in memory.
@@ -763,7 +853,11 @@ async function buildGeom(pg) {
       } } }
   sx = sx.slice(0, 4 * n); G.px = sx;
   G.segs = new Proxy({ length: n }, { get: (o, k) => k === 'length' ? n : (typeof k === 'string' && /^\d+$/.test(k)) ? [sx[4 * k], sx[4 * k + 1], sx[4 * k + 2], sx[4 * k + 3]] : undefined });
-  for (let i = 0; i < n; i++) gridAdd(G.grid, i, sx[4 * i], sx[4 * i + 1], sx[4 * i + 2], sx[4 * i + 3]); G.ready = true; return G;
+  for (let i = 0; i < n; i++) gridAdd(G.grid, i, sx[4 * i], sx[4 * i + 1], sx[4 * i + 2], sx[4 * i + 3]);
+  // Merged axis walls for sleeve→perp (dashed/broken lines become continuous)
+  const raw = []; for (let i = 0; i < n; i++) raw.push([sx[4 * i], sx[4 * i + 1], sx[4 * i + 2], sx[4 * i + 3]]);
+  installWallIndex(G, raw);
+  G.ready = true; return G;
 }
 function cachedOps(page) { try { for (const st of page._intentStates.values()) { const o = st.operatorList; if (o && o.lastChunk && o.fnArray.length) return o; } } catch (e) { } return null; }
 function nearSegs(G, p, r) { const out = new Set(); const c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
@@ -880,21 +974,40 @@ function wallSegAt(G, i) {
   return G.segs[i];
 }
 function nearestPerpWall(from, toward, searchR) {
+  // Closest wall by perpendicular distance from `from`. If `toward` is set, only consider
+  // feet in that half-plane (direction of the finger) so the user can choose which wall.
+  // Segment is treated as an infinite line: if the foot falls past an end (or in a dash gap
+  // of a merged wall), we still return the foot and a faint extension.
   const G = geomCache[page]; if (!G || !G.ready) return null;
   const hasWall = (G.wallN && G.wallN > 0) || (G.segs && G.segs.length); if (!hasWall) return null;
   const R = searchR != null ? searchR : Math.max(doc.sizes[page].w, doc.sizes[page].h);
-  const around = toward || from; const ids = nearWallIds(G, around, R).slice(0, 600);
-  for (const i of nearWallIds(G, from, R).slice(0, 400)) if (!ids.includes(i)) ids.push(i);
-  const minL = minWallLen(); let best = null;
+  // Always gather candidates around the sleeve first; also around the finger for far walls
+  const ids = nearWallIds(G, from, R).slice(0, 800);
+  if (toward) for (const i of nearWallIds(G, toward, R).slice(0, 400)) if (!ids.includes(i)) ids.push(i);
+  const minL = Math.min(minWallLen(), 0.006 * Math.min(doc.sizes[page].w, doc.sizes[page].h));
+  const dir = toward ? [toward[0] - from[0], toward[1] - from[1]] : null;
+  const dirL = dir ? Math.hypot(dir[0], dir[1]) : 0;
+  let best = null, bestAny = null;
   for (const i of ids) {
     const s = wallSegAt(G, i); if (!s || s[4]) continue;
     const len = Math.hypot(s[2] - s[0], s[3] - s[1]); if (len < minL) continue;
     const hit = infinitePerp(from, s); const dLen = dist(from, hit.foot); if (dLen < 1e-6) continue;
-    const dPtr = toward ? dist(toward, hit.foot) : dLen;
-    if (!best || dPtr < best.dPtr - 1e-6 || (Math.abs(dPtr - best.dPtr) < 1e-6 && dLen < best.dLen))
-      best = { foot: hit.foot, onSeg: hit.onSeg, t: hit.t, seg: s.slice(0, 4), dPtr, dLen, ext: hit.onSeg ? null : wallExtPts(s, hit.t) };
+    // Prefer walls in the finger's direction cone (~70°): foot must lie mostly along toward
+    let along = dLen;
+    if (dirL > 1e-6) {
+      along = ((hit.foot[0] - from[0]) * dir[0] + (hit.foot[1] - from[1]) * dir[1]) / dirL;
+      const cand = { foot: hit.foot, onSeg: hit.onSeg, t: hit.t, seg: s.slice(0, 4), dLen, along, ext: hit.onSeg ? null : wallExtPts(s, hit.t) };
+      if (!bestAny || dLen < bestAny.dLen) bestAny = cand;
+      // Skip walls whose foot is sideways/backwards relative to the finger
+      if (along < dLen * 0.35) continue;
+      if (!best || dLen < best.dLen - 1e-6 || (Math.abs(dLen - best.dLen) < 1e-6 && along > best.along)) best = cand;
+      continue;
+    }
+    const cand = { foot: hit.foot, onSeg: hit.onSeg, t: hit.t, seg: s.slice(0, 4), dLen, along, ext: hit.onSeg ? null : wallExtPts(s, hit.t) };
+    if (!best || dLen < best.dLen - 1e-6) best = cand;
+    if (!bestAny || dLen < bestAny.dLen) bestAny = cand;
   }
-  return best;
+  return best || bestAny;
 }
 let wallExt = null; // { a:[x,y], b:[x,y] } fictional wall continuation while aiming / on item
 function findSnap(p, r, exclude, opts) {
@@ -902,12 +1015,12 @@ function findSnap(p, r, exclude, opts) {
   opts = opts || {};
   // 1) Sleeve centres / orange anchors — highest priority within the snap radius (win over nearby lines)
   if (G && G.sleeve) for (const q of nearSleevePts(G, p, r)) consider(q, 'sleeve', -1);
-  // 2) Optional perpendicular foot when measuring from a sleeve centre
+  // 2) Perpendicular foot when measuring from a sleeve centre — always lock (never free in empty space)
   if (opts.perpFrom) {
-    const hit = nearestPerpWall(opts.perpFrom, p, Math.max(r * 8, 80 / zoom));
+    const hit = nearestPerpWall(opts.perpFrom, p, Math.max(r * 20, Math.max(doc.sizes[page].w, doc.sizes[page].h)));
     if (hit) {
-      const pr = Math.max(r * 2.5, 28 / zoom); // generous so the foot is easy to catch on a phone
-      if (dist(p, hit.foot) <= pr) { consider(hit.foot, hit.onSeg ? 'perp' : 'perp-ext', -2); if (best && (best.kind === 'perp' || best.kind === 'perp-ext')) wallExt = hit.ext ? { a: hit.ext[0], b: hit.ext[1] } : null; }
+      consider(hit.foot, hit.onSeg ? 'perp' : 'perp-ext', -2);
+      if (best && (best.kind === 'perp' || best.kind === 'perp-ext')) wallExt = hit.ext ? { a: hit.ext[0], b: hit.ext[1] } : null;
     }
   }
   // 3) Markup points
@@ -942,16 +1055,26 @@ function aim(p, e, prev, exclude) {
   if (st) q = st.q;
   if (snapOn && !e.altKey && doc && proj) {
     if (!geomCache[page]) buildGeom(page);
-    const r = (touchR ? 22 : 12) / zoom;
-    const fromSleeve = !!(prev && tool === 'line' && isSleeveCentrePt(prev, Math.max(3 / zoom, 0.5)));
-    const h = findSnap(ortho ? q : p, r, exclude, fromSleeve ? { perpFrom: prev } : null);
-    if (h) { snapHit = { p: h.p.slice(), kind: h.kind === 'sleeve' ? 'center' : h.kind === 'perp' || h.kind === 'perp-ext' ? h.kind : h.kind }; q = h.p.slice();
-      if (h.kind === 'perp' || h.kind === 'perp-ext') { /* wallExt set inside findSnap */ }
-      else wallExt = null;
-      if (ortho) { const hz = Math.abs(p[0] - prev[0]) >= Math.abs(p[1] - prev[1]); q = hz ? [h.p[0], prev[1]] : [prev[0], h.p[1]]; snapHit.p = q; wallExt = null; }
-      else if (st && h.kind !== 'perp' && h.kind !== 'perp-ext' && h.kind !== 'sleeve') {
-        const k = keepStraight(h, st, prev, r); if (k) { q = k; snapHit.p = k; guide = Object.assign({}, st, { q: k }); } else guide = straightInfo(q, prev, exclude); } }
-    else if (st) guide = st;
+    // Generous radius so sleeve centre dots are easy to hit on a phone (dots are ~11 CSS px across)
+    const r = (touchR ? 28 : 14) / zoom;
+    const fromSleeve = !!(prev && tool === 'line' && isSleeveCentrePt(prev, Math.max(4 / zoom, 1)));
+    if (fromSleeve) {
+      // Hard lock: second point is always the perpendicular foot in the finger's direction (never empty space)
+      const hit = nearestPerpWall(prev, p, Math.max(doc.sizes[page].w, doc.sizes[page].h));
+      if (hit) {
+        q = hit.foot.slice();
+        snapHit = { p: q.slice(), kind: hit.onSeg ? 'perp' : 'perp-ext' };
+        wallExt = hit.ext ? { a: hit.ext[0].slice(), b: hit.ext[1].slice() } : null;
+      }
+    } else {
+      const h = findSnap(ortho ? q : p, r, exclude, null);
+      if (h) { snapHit = { p: h.p.slice(), kind: h.kind === 'sleeve' ? 'center' : h.kind }; q = h.p.slice();
+        wallExt = null;
+        if (ortho) { const hz = Math.abs(p[0] - prev[0]) >= Math.abs(p[1] - prev[1]); q = hz ? [h.p[0], prev[1]] : [prev[0], h.p[1]]; snapHit.p = q; }
+        else if (st) {
+          const k = keepStraight(h, st, prev, r); if (k) { q = k; snapHit.p = k; guide = Object.assign({}, st, { q: k }); } else guide = straightInfo(q, prev, exclude); } }
+      else if (st) guide = st;
+    }
   } else if (st) guide = st;
   showSnapMark(); syncToWallUi(); return q;
 }
@@ -977,25 +1100,26 @@ function drawWallExtSvg(g) {
   el('path', { fill: 'none', stroke: '#90a4ae', 'stroke-width': w, 'stroke-dasharray': `${5 / zoom} ${4 / zoom}`, 'stroke-opacity': '0.85', d: `M${a[0]} ${a[1]}L${b[0]} ${b[1]}` }, g);
 }
 function syncToWallUi() {
-  const show = !!(tool === 'line' && draft && draft.type === 'line' && draft.pts.length === 1 && isSleeveCentrePt(draft.pts[0], Math.max(3 / zoom, 0.5)));
+  const show = !!(tool === 'line' && draft && draft.type === 'line' && draft.pts.length === 1 && isSleeveCentrePt(draft.pts[0], Math.max(4 / zoom, 1)));
   document.body.classList.toggle('towall', show);
-  const b = $('#toWallBtn'); if (b) b.hidden = !show;
+  const b = $('#toWallBtn'); if (b) { b.hidden = !show; if (show) b.textContent = 'To wall'; }
 }
-function applyToWall() {
-  if (!(tool === 'line' && draft && draft.pts.length === 1)) return;
-  if (!geomCache[page]) return toast('Still preparing the drawing…');
-  const hit = nearestPerpWall(draft.pts[0], null, Math.max(doc.sizes[page].w, doc.sizes[page].h));
-  if (!hit) return toast('No wall or line nearby to measure to.');
+function applyToWall(toward) {
+  if (!(tool === 'line' && draft && draft.pts.length === 1)) return false;
+  if (!geomCache[page] || !geomCache[page].ready) { toast('Still preparing the drawing…'); return false; }
+  const hit = nearestPerpWall(draft.pts[0], toward || null, Math.max(doc.sizes[page].w, doc.sizes[page].h));
+  if (!hit) { toast('No wall or line nearby to measure to.'); return false; }
   draft.pts.push(hit.foot.slice());
   if (hit.ext) draft.ext = [hit.ext[0].slice(), hit.ext[1].slice()];
   wallExt = hit.ext ? { a: hit.ext[0], b: hit.ext[1] } : null;
   finishDraft(); toast('Measured perpendicular to wall' + (hit.onSeg ? '' : ' (extended)'));
+  return true;
 }
-$('#toWallBtn').onclick = () => applyToWall();
+$('#toWallBtn').onclick = () => applyToWall(null);
 const _draw3 = draw; draw = function () { _draw3(); if (snapHit && (PLACE.includes(tool) || ['count', 'sleeve', 'origin'].includes(tool) || gesture)) showSnapMark(); };
 const _loadDoc = loadDoc; loadDoc = async function (...a) { for (const k in geomCache) delete geomCache[k]; const r = await _loadDoc(...a); return r; };
 vpEl.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !gesture) { snapHit = null; showSnapMark(); } });
-window.PMsnap = { buildGeom: pg => buildGeom(pg), ensureSleeveSnap: pg => ensureSleeveSnap(pg), findSnap, nearestPerpWall, isSleeveCentrePt, get hit() { return snapHit; }, get wallExt() { return wallExt; }, geom: geomCache };
+window.PMsnap = { buildGeom: pg => buildGeom(pg), ensureSleeveSnap: pg => ensureSleeveSnap(pg), findSnap, nearestPerpWall, isSleeveCentrePt, applyToWall, mergeCollinearSegs, get hit() { return snapHit; }, get wallExt() { return wallExt; }, geom: geomCache };
 // Snap geometry is built when something uses it: CAD drawings, a page with sleeves, or a measuring tool in hand.
 // Building it on every open made heavy PDFs slower to open and is wasted when you only look at the plan.
 const snapTool = t => PLACE.includes(t) || ['count', 'sleeve', 'origin'].includes(t);

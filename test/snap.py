@@ -35,8 +35,10 @@ with sync_playwright() as p:
     def scr(x,y):
         r=pg.evaluate("(()=>{const r=document.querySelector('#svg').getBoundingClientRect();return [r.left,r.top]})()"); z=pg.evaluate('PM.zoom'); return r[0]+x*z, r[1]+(H-y)*z
     tx,ty=scr(900,450); T=lambda t,x,y: cdp.send('Input.dispatchTouchEvent',{'type':t,'touchPoints':[] if t=='touchEnd' else [{'x':x,'y':y}]})
-    T('touchStart',tx+30,ty+30)
-    for i in range(1,11): T('touchMove',tx+30-2.8*i,ty+30-2.6*i); pg.wait_for_timeout(20)
+    # Aim lifts 72 CSS px above the finger while dragging — end the finger below the target
+    AIM_UP=72; fx,fy=tx, ty+AIM_UP
+    T('touchStart',fx+30,fy+30)
+    for i in range(1,11): T('touchMove',fx+30-3*i,fy+30-3*i); pg.wait_for_timeout(20)
     pg.wait_for_timeout(400); pg.wait_for_function("document.querySelector('#loupe').dataset.sharp==='1'",timeout=5000); pg.wait_for_timeout(200)
     pg.screenshot(path='shots/phone-snap.png'); T('touchEnd',0,0); pg.wait_for_timeout(150)
     q=pg.evaluate('PM.draft.pts[0]'); chk(f'phone touch snap to intersection {q}', abs(q[0]-900)<0.01 and abs(q[1]-(H-450))<0.01)
