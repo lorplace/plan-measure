@@ -913,15 +913,16 @@ function findSnap(p, r, exclude, opts) {
   // 3) Markup points
   for (const it of proj.items) if (it.page === page) for (const q of it.pts) if (q !== exclude) consider(q, 'end', 0);
   if (draft) for (const q of draft.pts) if (q !== exclude) consider(q, 'end', 0);
-  // 4) Plan geometry: ends / mids / centres / intersections, then lines
+  // 4) Plan geometry: ends / mids / centres / intersections, then lines.
+  // Ends/x share pri 0 with markup so the closest target wins; sleeves (pri -1) still beat both.
   if (G && G.ready && G.segs.length) { const ids = nearSegs(G, p, r).slice(0, 400), S = ids.map(i => G.segs[i]);
-    for (const s of S) if (!s[4]) { consider([s[0], s[1]], 'end', 1); consider([s[2], s[3]], 'end', 1); }
+    for (const s of S) if (!s[4]) { consider([s[0], s[1]], 'end', 0); consider([s[2], s[3]], 'end', 0); }
     if (G.pgrid) { const c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
-      for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) for (const i of (G.pgrid.get(cx + ',' + cy) || [])) { const q = G.pts.get ? G.pts.get(i) : G.pts[i]; consider([q[0], q[1]], q[2], q[2] === 'center' ? 1 : 1); } }
+      for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) for (const i of (G.pgrid.get(cx + ',' + cy) || [])) { const q = G.pts.get ? G.pts.get(i) : G.pts[i]; consider([q[0], q[1]], q[2], 0); } }
     { const near = S.filter(s => dist(projSeg(p, s), p) <= r).slice(0, 80);
-      for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) { const x = segX(near[i], near[j]); if (x) consider(x, 'x', 1); }
-      if (!best || best.pri > 1) for (const s of near) consider(projSeg(p, s), 'line', 2); } }
-  if ((!best || best.pri > 1) && G && G.pix) { // image: nearest dark pixel, refined to centre of the dark stroke
+      for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) { const x = segX(near[i], near[j]); if (x) consider(x, 'x', 0); }
+      if (!best || best.pri > 0) for (const s of near) consider(projSeg(p, s), 'line', 2); } }
+  if (!best && G && G.pix) { // image: nearest dark pixel, refined to centre of the dark stroke
     const { width: W, height: Hh, data } = G.pix, R = Math.ceil(r), x0 = Math.round(p[0]), y0 = Math.round(p[1]); let bd = 1e9, bq = null;
     const dark = (x, y) => x >= 0 && y >= 0 && x < W && y < Hh && (data[(y * W + x) * 4] * .3 + data[(y * W + x) * 4 + 1] * .59 + data[(y * W + x) * 4 + 2] * .11) < 110;
     for (let y = y0 - R; y <= y0 + R; y++) for (let x = x0 - R; x <= x0 + R; x++) if (dark(x, y)) { const d = (x - p[0]) ** 2 + (y - p[1]) ** 2; if (d < bd) { bd = d; bq = [x, y]; } }
