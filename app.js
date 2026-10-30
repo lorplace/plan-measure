@@ -47,6 +47,20 @@ let renderTimer = null, shiftDown = false, guide = null, straightOn = localStora
 // ---------- helpers ----------
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 function toast(msg, ms = 2500) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('show'), ms); }
+let openBusy = false; // true while a plan is still opening — snap indexing must not run
+function setSleeveStatus(msg) {
+  const el = $('#saveState');
+  if (!el) { if (msg) toast(msg, 8000); return; }
+  if (msg) {
+    if (!el.dataset.sleeve) { el.dataset.prev = el.textContent; el.dataset.prevClass = el.className; }
+    el.dataset.sleeve = '1'; el.textContent = msg; el.className = 'saving'; return;
+  }
+  if (el.dataset.sleeve) {
+    delete el.dataset.sleeve;
+    el.textContent = el.dataset.prev || ''; el.className = el.dataset.prevClass || '';
+    delete el.dataset.prev; delete el.dataset.prevClass;
+  }
+}
 const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 function polyLen(pts, closed) { let s = 0; for (let i = 1; i < pts.length; i++) s += dist(pts[i - 1], pts[i]); if (closed && pts.length > 2) s += dist(pts[pts.length - 1], pts[0]); return s; }
 function polyArea(pts) { let s = 0; for (let i = 0; i < pts.length; i++) { const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length]; s += x1 * y2 - x2 * y1; } return Math.abs(s) / 2; }
@@ -77,12 +91,19 @@ async function onFile(e) { const f = e.target.files[0]; if (!f) return; e.target
   const bytes = new Uint8Array(await f.arrayBuffer());
   if (fileMime(f) === 'application/dwg') toast('Reading DWG (first time loads a 10 MB converter)...', 8000); else toast('Opening...', 8000);
   await new Promise(r => setTimeout(r, 50)); // let the message paint before heavy parsing
-  try { await loadDoc(bytes, fileMime(f), f.name); } catch (err) { console.error(err); doc = null; layout();
+  openBusy = true;
+  try { await loadDoc(bytes, fileMime(f), f.name); } catch (err) { console.error(err); doc = null; layout(); openBusy = false;
     return toast(fileMime(f) === 'application/dwg' ? 'Could not read this DWG (' + err.message + '). Save it as DXF from your CAD program, or convert it free with ODA File Converter, then open the DXF.' : 'Could not open file: ' + err.message, 10000); }
   proj = { id: uid(), name: f.name.replace(/\.[^.]+$/, ''), fileName: f.name, fileType: doc.mime, units: $('#units').value || Units.DEFAULT_UNITS, unitsMigratedMm: true, scales: {}, items: [], origins: {}, hidden: {} };
   let msg = 'Opened ' + f.name + '. Set the scale before measuring.';
   if (doc.type === 'cad') { if (doc.cad.unitM) { proj.scales[1] = doc.cad.unitM / doc.cad.k; proj.scaleNames = { 1: 'CAD units: ' + doc.cad.unitName }; msg = 'Opened ' + f.name + ' (' + doc.cad.unitName + '). True scale set from the drawing.'; { const cu = [1, 2, 10].includes(doc.cad.units) ? 'imp' : 'mm'; setProjectUnits(cu); } } else msg = 'Opened ' + f.name + '. Drawing has no units: choose them in Set scale.';  if (doc.cad.xrefs && doc.cad.xrefs.length) msg += ' Missing external references (not in this file): ' + doc.cad.xrefs.slice(0, 3).join(', ') + (doc.cad.xrefs.length > 3 ? ' and ' + (doc.cad.xrefs.length - 3) + ' more' : '') + '. Bind them in your CAD program to see them.'; }
-  page = 1; resetHist(); fitPage(); renderLayers(); await persist(); toast(msg, 5000);
+  openBusy = true;
+  try {
+    page = 1; resetHist(); fitPage(); renderLayers();
+    await waitFirstPaint(2500);
+    await persist();
+    toast(msg, 5000);
+  } finally { openBusy = false; scheduleWarmGeom(600, true); }
 }
 $('#file').addEventListener('change', onFile);
 
@@ -603,7 +624,25 @@ setTool('select');
   const size = r.bytes ? (r.bytes.byteLength || r.bytes.length || 0) : 0, heavy = r.fileType === 'cad' || /\.(dwg|dxf)$/i.test(r.fileName || '') || size > 8e6, crashed = localStorage.getItem('pm-opening') === last;
   const btn = $('#resumeBtn'); if (btn) { btn.hidden = false; const lab = 'Continue ' + (r.name || r.fileName || 'last project'), t = btn.querySelector('.t'); if (t) t.textContent = lab; else btn.textContent = lab; btn.title = lab; btn.onclick = () => openGuarded(last); }
   renderRecent(); void heavy; void crashed; /* never auto-reopen: the user taps Continue */ })();
-async function openGuarded(id) { localStorage.setItem('pm-opening', id); toast('Opening...', 60000); await new Promise(r => setTimeout(r, 50)); try { await openProject(id); toast('Opened ' + (proj && proj.name || 'project')); } catch (e) { toast('Could not open the project: ' + e.message, 5000); } finally { localStorage.removeItem('pm-opening'); } }
+async function waitFirstPaint(ms) {
+  // Resolve once the base plan bitmap is up, or after ms — never block opening on snap work
+  const t0 = performance.now();
+  while (performance.now() - t0 < ms) {
+    if (doc && base && base._ok && base._key === viewKey()) return true;
+    await new Promise(r => setTimeout(r, 50));
+  }
+  return !!(doc && base && base._ok);
+}
+async function openGuarded(id) {
+  localStorage.setItem('pm-opening', id); toast('Opening...', 60000); await new Promise(r => setTimeout(r, 50));
+  openBusy = true;
+  try {
+    await openProject(id);
+    await waitFirstPaint(2500);
+    toast('Opened ' + (proj && proj.name || 'project'));
+  } catch (e) { toast('Could not open the project: ' + e.message, 5000); }
+  finally { openBusy = false; localStorage.removeItem('pm-opening'); scheduleWarmGeom(600, true); }
+}
 // test hook
 window.PM = { undo: () => undo(), redo: () => redo(), get hist() { return { u: H.u.length, r: H.r.length }; }, get draft() { return draft; }, get proj() { return proj; }, get doc() { return doc; }, measure, buildCSV, buildPDF, setTool, gotoPage, applyScale, get zoom() { return zoom; } };
 $('#calVal').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#calDlg').close('ok'); } });
@@ -833,9 +872,31 @@ async function buildGeom(pg) {
   // Reuse the operator list pdf.js already holds from drawing the page; asking for it again made the worker parse the
   // whole page a second time and kept a second copy in memory.
   let page, ops;
-  try { page = await d.pdf.getPage(pg); ops = cachedOps(page) || await page.getOperatorList(); }
-  catch (e) { if (geomCache[pg] === G) delete geomCache[pg]; return G; } // closed or failed: let a later call try again
-  if (doc !== d) { if (geomCache[pg] === G) delete geomCache[pg]; return G; } // another plan was opened meanwhile
+  try {
+    page = await d.pdf.getPage(pg);
+    ops = cachedOps(page);
+    // On phone, wait for the first paint to populate the operator cache instead of forcing a second full parse
+    if (!ops && isPhoneDev) {
+      for (let w = 0; w < 50 && !ops; w++) {
+        await new Promise(r => setTimeout(r, 100));
+        if (doc !== d || openBusy) { if (geomCache[pg] === G) delete geomCache[pg]; return G; }
+        ops = cachedOps(page);
+      }
+    }
+    // Phone: never force a second full parse (Safari OOM on big CAD PDFs)
+    if (!ops) {
+      if (isPhoneDev) { installWallIndex(G, []); G.ready = true; return G; }
+      ops = await page.getOperatorList();
+    }
+  } catch (e) { if (geomCache[pg] === G) delete geomCache[pg]; return G; }
+  if (doc !== d) { if (geomCache[pg] === G) delete geomCache[pg]; return G; }
+  if (openBusy) { if (geomCache[pg] === G) delete geomCache[pg]; return G; } // open still in progress: retry later
+  // iPhone: multi-million-op CAD sheets OOM Safari if we walk the operator list here.
+  // Mark ready with empty walls; sleeve anchors come from the already-drawn base bitmap.
+  if (isPhoneDev && ops && ops.fnArray.length > 350000) {
+    installWallIndex(G, []);
+    G.ready = true; return G;
+  }
   const vp = d.vps[pg], OPS = pdfjsLib.OPS, U = pdfjsLib.Util;
   // Segments go into one Float64Array (x1 y1 x2 y2 each) rather than an array per segment, and points are transformed
   // without allocating: the old version created two arrays per path point.
@@ -844,9 +905,12 @@ async function buildGeom(pg) {
   const add = (x1, y1, x2, y2) => { if (n >= MAXS || Math.abs(x1 - x2) + Math.abs(y1 - y2) <= 0.05) return;
     if (4 * n + 4 > sx.length) { const b = new Float64Array(Math.min(4 * MAXS, sx.length * 2)); b.set(sx); sx = b; }
     const o = 4 * n++; sx[o] = x1; sx[o + 1] = y1; sx[o + 2] = x2; sx[o + 3] = y2; };
-  const GEOM_CHUNK = isPhoneDev ? 40000 : 100000;
+  const GEOM_CHUNK = isPhoneDev ? 8000 : 80000;
   for (let i = 0; i < ops.fnArray.length && n < MAXS; i++) {
-    if (i && (i % GEOM_CHUNK) === 0) await new Promise(r => setTimeout(r, 0));
+    if (i && (i % GEOM_CHUNK) === 0) {
+      if (doc !== d || openBusy) { if (geomCache[pg] === G) delete geomCache[pg]; return G; }
+      await new Promise(r => setTimeout(r, 0));
+    }
     const fn = ops.fnArray[i], args = ops.argsArray[i];
     if (fn === OPS.save) stack.push(ctm); else if (fn === OPS.restore) { if (stack.length) setCtm(stack.pop()); }
     else if (fn === OPS.transform) setCtm(U.transform(ctm, args));
@@ -1012,12 +1076,18 @@ function scanOrangeFromPix(G) {
   const { width: W, height: Hh, data } = G.pix;
   return clusterOrange(data, W, Hh, 1, 4, 2500);
 }
-async function scanOrangeFromPdfOps(pg) {
+async function scanOrangeFromPdfOps(pg, opsIn) {
   // Resolution-independent: orange fill/stroke path centres from the pdf.js operator list
-  let page, ops;
-  try { page = await doc.pdf.getPage(pg); ops = cachedOps(page) || await page.getOperatorList(); }
-  catch (e) { return []; }
+  let page, ops = opsIn;
+  try {
+    page = await doc.pdf.getPage(pg);
+    if (!ops) ops = cachedOps(page);
+    // Phone: never force a fresh getOperatorList for anchors (can be multi‑million ops / Safari OOM)
+    if (!ops && !isPhoneDev) ops = await page.getOperatorList();
+  } catch (e) { return []; }
   if (!ops || !ops.fnArray || !ops.fnArray.length) return [];
+  // Huge CAD sheets on phone: skip vector walk (render cache alone can be 4M+ ops)
+  if (isPhoneDev && ops.fnArray.length > 350000) return [];
   const vp = doc.vps[pg], OPS = pdfjsLib.OPS, U = pdfjsLib.Util;
   let fill = null, stroke = null, ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm);
   const stack = [];
@@ -1040,9 +1110,12 @@ async function scanOrangeFromPdfOps(pg) {
     if ((bw > 28 && bh < 0.8) || (bh > 28 && bw < 0.8)) return;
     raw.push([sx / n, sy / n]);
   };
-  const CHUNK = isPhoneDev ? 25000 : 60000;
+  const CHUNK = isPhoneDev ? 6000 : 50000;
   for (let i = 0; i < ops.fnArray.length; i++) {
-    if (i && (i % CHUNK) === 0) await new Promise(r => setTimeout(r, 0)); // keep UI alive on big CAD sheets
+    if (i && (i % CHUNK) === 0) {
+      if (openBusy || !doc) return [];
+      await new Promise(r => setTimeout(r, 0));
+    }
     const fn = ops.fnArray[i], args = ops.argsArray[i];
     if (fn === OPS.save) stack.push({ ctm, fill, stroke });
     else if (fn === OPS.restore) { const s = stack.pop(); if (s) { setCtm(s.ctm); fill = s.fill; stroke = s.stroke; } }
@@ -1103,33 +1176,43 @@ async function scanOrangeFromPdfRasterTiled(pg) {
   return dedupePts(pts, Math.max(2, 8e-4 * Math.max(w, h)));
 }
 async function scanOrangeFromPdf(pg) {
-  // Prefer vector ops (full CAD sheets); fall back to tiled raster for image plans / sparse ops
-  const vec = await scanOrangeFromPdfOps(pg);
-  if (vec.length >= 20) return vec;
-  // Few vector hits: try base bitmap then tiled high-res raster
-  if (base._ok && base._key === viewKey() && base._r > 0.35) {
-    try {
-      const ctx = base.getContext('2d', { willReadFrequently: true });
-      const { width: W, height: Hh } = base; const data = ctx.getImageData(0, 0, W, Hh).data;
-      const fromBase = clusterOrange(data, W, Hh, 1 / base._r, 3, 2500);
-      if (fromBase.length >= vec.length) {
-        const tiled = fromBase.length >= 20 ? fromBase : await scanOrangeFromPdfRasterTiled(pg);
-        return tiled.length >= fromBase.length ? tiled : fromBase;
-      }
-    } catch (e) { /* fall through */ }
-  }
-  const tiled = await scanOrangeFromPdfRasterTiled(pg);
-  return tiled.length >= vec.length ? tiled : vec;
+  // Opening must stay free: prefer the already-drawn base bitmap on phone; vector only when cheap
+  try {
+    if (base._ok && base._key === viewKey() && base._r > 0.2) {
+      try {
+        const ctx = base.getContext('2d', { willReadFrequently: true });
+        const { width: W, height: Hh } = base; const data = ctx.getImageData(0, 0, W, Hh).data;
+        const fromBase = clusterOrange(data, W, Hh, 1 / base._r, 3, 2500);
+        // On phone, accept base hits and skip multi-million op walks
+        if (isPhoneDev && fromBase.length >= 5) return fromBase;
+        if (!isPhoneDev && fromBase.length >= 40) return fromBase;
+        var basePts = fromBase;
+      } catch (e) { var basePts = []; }
+    } else var basePts = [];
+    let page; try { page = await doc.pdf.getPage(pg); } catch (e) { return basePts; }
+    const cached = cachedOps(page);
+    const vec = (cached && !(isPhoneDev && cached.fnArray.length > 350000))
+      ? await scanOrangeFromPdfOps(pg, cached) : [];
+    if (vec.length >= 20) return vec;
+    if (basePts.length >= 5) return basePts;
+    if (openBusy) return basePts;
+    const tiled = await scanOrangeFromPdfRasterTiled(pg);
+    return tiled.length >= basePts.length ? tiled : basePts;
+  } catch (e) { console.warn('scanOrangeFromPdf', e); return []; }
 }
 async function ensureSleeveSnap(pg) {
-  const G = await buildGeom(pg); if (!G.ready) return G;
-  if (G.sleeve && G.sleeve.gen === contentGen && G.sleeve.page === pg && G.sleeve.n >= 0) return G;
-  const pts = [];
-  if (proj) for (const it of proj.items) if (it.type === 'sleeve' && it.page === pg && it.pts && it.pts[0]) pts.push(it.pts[0]);
-  if (doc.type === 'cad') pts.push(...collectCadSleevePts());
-  else if (doc.type === 'image') pts.push(...scanOrangeFromPix(G));
-  else if (doc.type === 'pdf') pts.push(...(await scanOrangeFromPdf(pg)));
-  buildSleeveIndex(G, pts); return G;
+  try {
+    if (openBusy) return geomCache[pg] || { ready: false };
+    const G = await buildGeom(pg); if (!G || !G.ready || openBusy) return G || { ready: false };
+    if (G.sleeve && G.sleeve.gen === contentGen && G.sleeve.page === pg && G.sleeve.n >= 0) return G;
+    const pts = [];
+    if (proj) for (const it of proj.items) if (it.type === 'sleeve' && it.page === pg && it.pts && it.pts[0]) pts.push(it.pts[0]);
+    if (doc.type === 'cad') pts.push(...collectCadSleevePts());
+    else if (doc.type === 'image') pts.push(...scanOrangeFromPix(G));
+    else if (doc.type === 'pdf') pts.push(...(await scanOrangeFromPdf(pg)));
+    if (openBusy) return G;
+    buildSleeveIndex(G, pts); return G;
+  } catch (e) { console.warn('ensureSleeveSnap', e); return geomCache[pg] || { ready: false }; }
 }
 function nearSleevePts(G, p, r) {
   if (!G || !G.sleeve || !G.sleeve.n) return [];
@@ -1330,9 +1413,35 @@ window.PMsnap = { buildGeom: pg => buildGeom(pg), ensureSleeveSnap: pg => ensure
 // Building it on every open made heavy PDFs slower to open and is wasted when you only look at the plan.
 const snapTool = t => PLACE.includes(t) || ['count', 'sleeve', 'origin'].includes(t);
 const geomWanted = () => !!doc && (doc.type === 'cad' || snapTool(tool) || !!(proj && proj.items.some(i => i.page === page && i.type === 'sleeve')));
-const warmGeom = () => { if (!doc) return; const go = () => ensureSleeveSnap(page).then(() => draw()).catch(() => { }); if (!geomCache[page]) buildGeom(page).then(go).catch(() => { }); else go(); };
-const _rc = renderCanvas; renderCanvas = async function () { await _rc(); if (geomWanted()) warmGeom(); };
-const _setToolG = setTool; setTool = function (t) { _setToolG(t); if (snapTool(t)) warmGeom(); };
+let warmTimer = null, warmGen = 0;
+function scheduleWarmGeom(delay, force) {
+  // Never index during open; always defer so the plan paints first.
+  // force=true after open so sleeve detection runs even on select tool.
+  if (openBusy || !doc) return;
+  if (!force && !geomWanted()) return;
+  const gen = ++warmGen; clearTimeout(warmTimer);
+  warmTimer = setTimeout(() => { idleWarmGeom(gen); }, delay == null ? 400 : delay);
+}
+function idleWarmGeom(gen) {
+  if (gen !== warmGen || openBusy || !doc) return;
+  const kick = () => { if (gen !== warmGen || openBusy || !doc) return; warmGeomNow(gen); };
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(() => kick(), { timeout: 1200 });
+  else setTimeout(kick, 0);
+}
+function warmGeomNow(gen) {
+  if (gen !== warmGen || openBusy || !doc) return;
+  const pg = page, d = doc;
+  setSleeveStatus('Finding sleeves…');
+  const done = () => { if (gen === warmGen) setSleeveStatus(''); };
+  const go = () => ensureSleeveSnap(pg).then(() => { if (gen !== warmGen || doc !== d) return; done(); draw(); }).catch(e => { console.warn('sleeve snap', e); done(); });
+  const start = () => { if (gen !== warmGen || doc !== d || openBusy) { done(); return; } if (!geomCache[pg]) buildGeom(pg).then(go).catch(e => { console.warn('buildGeom', e); done(); }); else go(); };
+  // One more idle slice so first interaction after open stays smooth
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(() => start(), { timeout: 2000 });
+  else setTimeout(start, 0);
+}
+const warmGeom = () => scheduleWarmGeom(0);
+const _rc = renderCanvas; renderCanvas = async function () { await _rc(); if (!openBusy && geomWanted()) scheduleWarmGeom(500); };
+const _setToolG = setTool; setTool = function (t) { _setToolG(t); if (snapTool(t)) scheduleWarmGeom(200); };
 
 // ---- CAD layers panel ----
 function layersChanged() { if (!doc || doc.type !== 'cad') return; for (const k in geomCache) delete geomCache[k]; sleeveCache.clear(); contentGen++; renderCanvas(); draw(); }
@@ -1588,9 +1697,12 @@ async function readPmproj(blob) {
   return { head, cad: head.cad ? dec(head.cad) : null, bytes: head.bytes ? dec(head.bytes) : null }; }
 async function openPmproj(f) {
   toast('Opening project file...', 30000); await new Promise(r => setTimeout(r, 30));
+  openBusy = true;
   try { const { head, cad, bytes } = await readPmproj(f); await loadDoc(cad ? { cadPack: cad } : ownBytes(bytes), head.mime, head.name);
-    proj = Object.assign({ origins: {}, hidden: {}, slab: {} }, head.proj); migrateProjectUnits(proj); resetHist(); $('#units').value = proj.units; if ($('#units2')) $('#units2').value = proj.units; page = 1; selId = null; draft = null; fitPage(); renderLayers(); persistSoon(); toast('Opened ' + f.name); }
-  catch (err) { console.error(err); toast('Could not open the project file: ' + err.message, 8000); } }
+    proj = Object.assign({ origins: {}, hidden: {}, slab: {} }, head.proj); migrateProjectUnits(proj); resetHist(); $('#units').value = proj.units; if ($('#units2')) $('#units2').value = proj.units; page = 1; selId = null; draft = null; fitPage(); renderLayers();
+    await waitFirstPaint(2500); persistSoon(); toast('Opened ' + f.name); }
+  catch (err) { console.error(err); toast('Could not open the project file: ' + err.message, 8000); }
+  finally { openBusy = false; scheduleWarmGeom(600, true); } }
 $('#pmprojBtn').onclick = async () => { if (!proj || !doc) return toast('Open a plan first.'); toast('Building project file...', 20000); const b = await buildPmproj(); download(b, (proj.name || 'project') + '.pmproj', 'application/octet-stream'); toast('Saved ' + (b.size / 1e6).toFixed(1) + ' MB project file'); };
 Object.assign(window.PM, { buildPmproj });
 
