@@ -100,10 +100,16 @@ async function onFile(e) { const f = e.target.files[0]; if (!f) return; e.target
   openBusy = true;
   try {
     page = 1; resetHist(); fitPage(); renderLayers();
-    await waitFirstPaint(2500);
-    await persist();
-    toast(msg, 5000);
-  } finally { openBusy = false; scheduleWarmGeom(600, true); }
+    const painted = await waitFirstPaint(isPhoneDev ? 15000 : 6000);
+    if (!painted) toast('Opened ' + f.name + ' — still drawing the plan…', 4000);
+    else toast(msg, 5000);
+    try { await persist(); } catch (e) { console.warn('persist', e); }
+  } finally {
+    openBusy = false;
+    // Sleeve/anchor scan only after a successful base paint — never cancel or race the first draw.
+    if (base && base._ok) scheduleWarmGeom(800, true);
+    else scheduleRender(200); // keep trying to paint; renderCanvas will warm geom once base is up
+  }
 }
 $('#file').addEventListener('change', onFile);
 
@@ -155,7 +161,9 @@ function layout() {
 // During pinch / wheel / scroll the bitmaps are only moved and scaled with CSS; drawing happens ~150 ms after the gesture ends.
 const isPhoneDev = matchMedia('(pointer:coarse)').matches || /iPhone|iPad|iPod/.test(navigator.userAgent);
 const renderDpr = () => Math.min(window.devicePixelRatio || 1, isPhoneDev ? 2 : 3); // 2x keeps plan lines crisp with 2.25x fewer pixels than 3x
-const BASE_MAX_PX = isPhoneDev ? 3e6 : 8e6, SHARP = 1.25;
+// iOS Safari blanks (or zeros) canvases past ~4096 px on a side or ~16.7 Mpx total; stay well under both.
+const CANVAS_MAX_DIM = 4096, CANVAS_MAX_AREA = isPhoneDev ? 4e6 : 16e6;
+const BASE_MAX_PX = isPhoneDev ? 2.5e6 : 8e6, SHARP = 1.25;
 const base = document.createElement('canvas'); base.id = 'canvasBase'; base.width = base.height = 0; base.setAttribute('aria-hidden', 'true');
 base.style.cssText = 'display:block;position:absolute;left:0;top:0;will-change:transform;pointer-events:none;visibility:hidden';
 canvas.before(base);
@@ -163,10 +171,22 @@ const back = document.createElement('canvas'); back.width = back.height = 0; // 
 let docSeq = 0, contentGen = 0, baseJob = null, detailJob = null, renderSeq = 0;
 const viewKey = () => doc ? doc.uid + ':' + page + ':' + contentGen : '';
 function fitZoomOf(pg) { const { w, h } = doc.sizes[pg]; return Math.max(0.05, Math.min((vpEl.clientWidth - 40) / w, (vpEl.clientHeight - 40) / h)); }
+// Clamp a scale so cw×ch stays inside iOS canvas limits (area + per-side).
+function clampScale(w, h, s) {
+  if (!(s > 0) || !(w > 0) || !(h > 0)) return 0.05;
+  let cw = w * s, ch = h * s;
+  if (cw > CANVAS_MAX_DIM) s *= CANVAS_MAX_DIM / cw;
+  cw = w * s; ch = h * s;
+  if (ch > CANVAS_MAX_DIM) s *= CANVAS_MAX_DIM / ch;
+  cw = w * s; ch = h * s;
+  const area = cw * ch;
+  if (area > CANVAS_MAX_AREA) s *= Math.sqrt(CANVAS_MAX_AREA / area);
+  return Math.max(0.05, s);
+}
 // Base resolution: sharp up to about 1.5x the fit zoom, within the pixel budget (on a phone that is 1:1 with the screen at
 // fit, so the first full draw costs what it did before). Past that the detail layer takes over. Images are never drawn above their own size.
-function baseScale() { const { w, h } = doc.sizes[page]; let s = Math.min(Math.sqrt(BASE_MAX_PX / (w * h)), fitZoomOf(page) * renderDpr() * 1.5); if (doc.type === 'image') s = Math.min(s, 1); return s; }
-function detailCap() { const d = renderDpr(); return isPhoneDev ? Math.max(3e6, Math.min(8e6, vpEl.clientWidth * vpEl.clientHeight * d * d * 1.5)) : 16e6; }
+function baseScale() { const { w, h } = doc.sizes[page]; let s = Math.min(Math.sqrt(BASE_MAX_PX / (w * h)), fitZoomOf(page) * renderDpr() * 1.5); if (doc.type === 'image') s = Math.min(s, 1); return clampScale(w, h, s); }
+function detailCap() { const d = renderDpr(); return isPhoneDev ? Math.max(2e6, Math.min(4e6, vpEl.clientWidth * vpEl.clientHeight * d * d * 1.5)) : 16e6; }
 const wantedScale = () => doc.type === 'image' ? Math.min(zoom * renderDpr(), 1) : zoom * renderDpr();
 // Visible part of the page in page units (null when the page is scrolled out of view)
 function visRect() { const { w, h } = doc.sizes[page], vr = vpEl.getBoundingClientRect(), sr = stage.getBoundingClientRect();
@@ -177,15 +197,49 @@ function planDetail(vis) { const { w, h } = doc.sizes[page], cap = detailCap(); 
   const grow = m => { const x0 = Math.max(0, vis.x0 - vis.w * m), y0 = Math.max(0, vis.y0 - vis.h * m), x1 = Math.min(w, vis.x0 + vis.w * (1 + m)), y1 = Math.min(h, vis.y0 + vis.h * (1 + m)); return { x0, y0, w: x1 - x0, h: y1 - y0 }; };
   for (;;) { reg = grow(m); if (reg.w * reg.h * r * r <= cap || m <= 0.05) break; m = Math.max(0.05, m - 0.1); }
   if (reg.w * reg.h * r * r > cap) r = Math.sqrt(cap / (reg.w * reg.h));
+  r = clampScale(reg.w, reg.h, r);
   return { reg, r }; }
 const covers = (g, v) => { const e = 1 / zoom; return g.x0 <= v.x0 + e && g.y0 <= v.y0 + e && g.x0 + g.w >= v.x0 + v.w - e && g.y0 + g.h >= v.y0 + v.h - e; };
 const fits = (st, vis, want) => !!(st && st.reg) && st.key === viewKey() && covers(st.reg, vis) && st.r >= want.r / SHARP && st.r <= want.r * 1.6;
 function placeCanvas() { if (!doc || !doc.sizes[page]) return; const { w, h } = doc.sizes[page], key = viewKey();
-  base.style.width = w * zoom + 'px'; base.style.height = h * zoom + 'px'; base.style.visibility = base._key === key ? '' : 'hidden';
+  // Hide base until a successful paint — a sized-but-empty canvas looks like a blank dark-grey plan on iPhone.
+  base.style.width = w * zoom + 'px'; base.style.height = h * zoom + 'px'; base.style.visibility = (base._key === key && base._ok) ? '' : 'hidden';
   const g = canvas._reg; canvas.style.visibility = g && canvas._on && canvas._key === key ? '' : 'hidden'; if (!g) return;
   canvas.style.left = g.x0 * zoom + 'px'; canvas.style.top = g.y0 * zoom + 'px'; canvas.style.width = g.w * zoom + 'px'; canvas.style.height = g.h * zoom + 'px'; }
 function cancelJob(j) { if (!j) return; j.dead = true; if (j.task) { try { j.task.cancel(); } catch (e) { } j.task = null; } }
 function dropRenders() { cancelJob(baseJob); cancelJob(detailJob); baseJob = detailJob = null; base._key = canvas._key = ''; base._ok = canvas._on = false; canvas._reg = null; canvas.width = canvas.height = base.width = base.height = back.width = back.height = 0; }
+function canvasLooksPainted(c) {
+  // Safari can "succeed" a render then leave a zeroed/transparent buffer under memory pressure.
+  // A white pre-fill alone must NOT count — require some non-white ink (plan lines).
+  try {
+    if (!c || !c.width || !c.height) return false;
+    const ctx = c.getContext('2d'); if (!ctx) return false;
+    const sample = (x, y, tw, th) => {
+      const d = ctx.getImageData(x, y, tw, th).data;
+      let ink = 0, lit = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const s = d[i] + d[i + 1] + d[i + 2];
+        if (s < 20) continue; // transparent/black void
+        if (s < 720) ink++; // not near-white
+        else lit++;
+      }
+      return { ink, lit };
+    };
+    const a = sample(0, 0, Math.min(c.width, 64), Math.min(c.height, 64));
+    if (a.ink >= 8) return true;
+    const cx = Math.max(0, Math.floor(c.width / 2) - 32), cy = Math.max(0, Math.floor(c.height / 2) - 32);
+    const b = sample(cx, cy, Math.min(64, c.width - cx), Math.min(64, c.height - cy));
+    if (b.ink >= 8) return true;
+    // Cad-ish near-empty corner: accept any non-zero variance with some lit pixels from pdf white bg + lines
+    return (a.ink + b.ink) >= 3;
+  } catch (e) { return false; }
+}
+function allocCanvasSize(c, cw, ch) {
+  // Setting an over-limit size on iOS yields a blank/zero canvas — refuse and let caller shrink.
+  if (cw > CANVAS_MAX_DIM || ch > CANVAS_MAX_DIM || cw * ch > CANVAS_MAX_AREA) return false;
+  try { c.width = cw; c.height = ch; } catch (e) { return false; }
+  return c.width === cw && c.height === ch;
+}
 // Draws page region reg at r device px per page unit into ctx (cw x ch). Throws if the job is cancelled.
 async function paintRegion(ctx, cw, ch, reg, r, job) {
   if (doc.type === 'pdf') { const p = await doc.pdf.getPage(page); if (job.dead) throw new Error('cancelled');
@@ -195,30 +249,61 @@ async function paintRegion(ctx, cw, ch, reg, r, job) {
   else ctx.drawImage(doc.img, reg.x0, reg.y0, reg.w, reg.h, 0, 0, cw, ch);
   ctx.restore(); }
 // Base: drawn straight into the visible canvas, so the first view of a heavy plan fills in as it draws.
+// On phone: retry at lower resolution if paint throws or Safari leaves a blank buffer. Never leave a sized empty canvas visible.
 function renderBase(key) {
   if (baseJob && baseJob.key === key) return baseJob.promise; // already drawing this page
   cancelJob(baseJob);
-  const { w, h } = doc.sizes[page], r = baseScale(), cw = Math.max(1, Math.ceil(w * r)), ch = Math.max(1, Math.ceil(h * r)), job = baseJob = { key };
+  const { w, h } = doc.sizes[page], job = baseJob = { key };
   job.promise = (async () => {
-    base.width = cw; base.height = ch; base._key = key; base._r = r; base._ok = false; placeCanvas();
-    try { await paintRegion(base.getContext('2d'), cw, ch, { x0: 0, y0: 0, w, h }, r, job); }
-    catch (e) { if (!job.dead) console.error(e); return false; } finally { if (baseJob === job) baseJob = null; }
-    if (job.dead) return false; base._ok = true; return true; })();
+    let r = baseScale();
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (job.dead || viewKey() !== key) return false;
+      r = clampScale(w, h, r);
+      const cw = Math.max(1, Math.ceil(w * r)), ch = Math.max(1, Math.ceil(h * r));
+      base._key = key; base._r = r; base._ok = false; placeCanvas();
+      if (!allocCanvasSize(base, cw, ch)) { r *= 0.55; continue; }
+      placeCanvas();
+      try {
+        const ctx = base.getContext('2d', { alpha: false });
+        if (!ctx) throw new Error('no 2d context');
+        // White fill first so a failed/partial paint is never a transparent hole over the grey viewport
+        ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
+        await paintRegion(ctx, cw, ch, { x0: 0, y0: 0, w, h }, r, job);
+      } catch (e) {
+        if (job.dead) return false;
+        console.warn('renderBase attempt', attempt, cw, 'x', ch, e && e.message || e);
+        r *= 0.55; continue;
+      }
+      if (job.dead || viewKey() !== key) return false;
+      if (!canvasLooksPainted(base)) { console.warn('renderBase blank buffer', cw, 'x', ch); r *= 0.55; continue; }
+      base._ok = true; placeCanvas();
+      if (baseJob === job) baseJob = null;
+      return true;
+    }
+    if (baseJob === job) baseJob = null;
+    // Give up: free the buffer so we do not flash a blank slab
+    try { base.width = base.height = 0; } catch (e) { }
+    base._ok = false; placeCanvas();
+    return false;
+  })();
   return job.promise;
 }
 // Detail: drawn into the back buffer, then copied to #canvas, so the current view stays up until the new one is ready.
 function renderDetail(key, vis, want) {
   if (detailJob && fits(detailJob, vis, want)) return detailJob.promise; // the render in flight already covers this view
   cancelJob(detailJob);
-  const { reg, r } = want, cw = Math.max(1, Math.ceil(reg.w * r)), ch = Math.max(1, Math.ceil(reg.h * r)), job = detailJob = { key, reg, r };
+  let { reg, r } = want;
+  r = clampScale(reg.w, reg.h, r);
+  const cw = Math.max(1, Math.ceil(reg.w * r)), ch = Math.max(1, Math.ceil(reg.h * r)), job = detailJob = { key, reg, r };
   job.promise = (async () => {
-    if (back.width !== cw || back.height !== ch) { back.width = cw; back.height = ch; }
+    if (!allocCanvasSize(back, cw, ch)) { if (detailJob === job) detailJob = null; return false; }
     try { await paintRegion(back.getContext('2d'), cw, ch, reg, r, job); }
-    catch (e) { if (!job.dead) console.error(e); return false; } finally { if (detailJob === job) detailJob = null; }
-    if (job.dead) return false;
-    if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
-    canvas.getContext('2d').drawImage(back, 0, 0); back.width = back.height = 0; // free the buffer now rather than whenever the browser collects it
-    canvas._reg = reg; canvas._r = r; canvas._key = key; canvas._on = true; placeCanvas(); return true; })();
+    catch (e) { if (!job.dead) console.warn('renderDetail', e && e.message || e); if (detailJob === job) detailJob = null; return false; }
+    if (job.dead) { if (detailJob === job) detailJob = null; return false; }
+    if (!allocCanvasSize(canvas, cw, ch)) { back.width = back.height = 0; if (detailJob === job) detailJob = null; return false; }
+    canvas.getContext('2d').drawImage(back, 0, 0); back.width = back.height = 0;
+    canvas._reg = reg; canvas._r = r; canvas._key = key; canvas._on = true; placeCanvas();
+    if (detailJob === job) detailJob = null; return true; })();
   return job.promise;
 }
 async function renderCanvas() {
@@ -625,23 +710,38 @@ setTool('select');
   const btn = $('#resumeBtn'); if (btn) { btn.hidden = false; const lab = 'Continue ' + (r.name || r.fileName || 'last project'), t = btn.querySelector('.t'); if (t) t.textContent = lab; else btn.textContent = lab; btn.title = lab; btn.onclick = () => openGuarded(last); }
   renderRecent(); void heavy; void crashed; /* never auto-reopen: the user taps Continue */ })();
 async function waitFirstPaint(ms) {
-  // Resolve once the base plan bitmap is up, or after ms — never block opening on snap work
+  // Prefer awaiting the in-flight base paint; never declare open done on a blank canvas.
+  // Phone heavy PDFs can take well over 2.5s — keep waiting (up to ms) and kick renderBase if idle.
+  const budget = Math.max(ms || 2500, isPhoneDev ? 12000 : 5000);
   const t0 = performance.now();
-  while (performance.now() - t0 < ms) {
-    if (doc && base && base._ok && base._key === viewKey()) return true;
-    await new Promise(r => setTimeout(r, 50));
+  while (performance.now() - t0 < budget) {
+    if (!doc) return false;
+    const key = viewKey();
+    if (base && base._ok && base._key === key) return true;
+    if (!baseJob || baseJob.key !== key) {
+      try { await renderBase(key); } catch (e) { console.warn('waitFirstPaint render', e); }
+      if (base && base._ok && base._key === key) return true;
+    } else {
+      try { await baseJob.promise; } catch (e) { }
+      if (base && base._ok && base._key === key) return true;
+    }
+    await new Promise(r => setTimeout(r, 80));
   }
-  return !!(doc && base && base._ok);
+  return !!(doc && base && base._ok && base._key === viewKey());
 }
 async function openGuarded(id) {
   localStorage.setItem('pm-opening', id); toast('Opening...', 60000); await new Promise(r => setTimeout(r, 50));
   openBusy = true;
   try {
     await openProject(id);
-    await waitFirstPaint(2500);
-    toast('Opened ' + (proj && proj.name || 'project'));
+    const painted = await waitFirstPaint(isPhoneDev ? 15000 : 6000);
+    toast(painted ? ('Opened ' + (proj && proj.name || 'project')) : ('Opened — still drawing the plan…'));
   } catch (e) { toast('Could not open the project: ' + e.message, 5000); }
-  finally { openBusy = false; localStorage.removeItem('pm-opening'); scheduleWarmGeom(600, true); }
+  finally {
+    openBusy = false; localStorage.removeItem('pm-opening');
+    if (base && base._ok) scheduleWarmGeom(800, true);
+    else scheduleRender(200);
+  }
 }
 // test hook
 window.PM = { undo: () => undo(), redo: () => redo(), get hist() { return { u: H.u.length, r: H.r.length }; }, get draft() { return draft; }, get proj() { return proj; }, get doc() { return doc; }, measure, buildCSV, buildPDF, setTool, gotoPage, applyScale, get zoom() { return zoom; } };
@@ -1286,9 +1386,12 @@ async function scanOrangeFromPdfOps(pg, opsIn) {
   return uniq;
 }
 async function scanOrangeFromPdfRasterTiled(pg) {
-  // Fallback for image-only plans: tile at high res, cluster per tile, release canvases
+  // Fallback for image-only plans: tile at high res, cluster per tile, release canvases.
+  // Never run while the base paint is still in flight — allocating more canvases blanks Safari.
+  if (baseJob && !baseJob.dead) return [];
+  if (!base._ok) return [];
   const { w, h } = doc.sizes[pg];
-  const maxPx = isPhoneDev ? 2.5e6 : 5e6;
+  const maxPx = isPhoneDev ? 1.2e6 : 5e6;
   // Target ~2.5–4 CSS px per diamond edge on a dense sheet
   let r = Math.min(2.5, Math.sqrt(maxPx / Math.max(1, (w * h) / 16))); // tile budget ≈ maxPx; 4×4 tiles
   const tilesX = w * r > 1800 ? 4 : (w * r > 900 ? 2 : 1);
@@ -1318,12 +1421,18 @@ async function scanOrangeFromPdf(pg) {
   // ops are already cached — chunked yields keep the UI alive on phone.
   try {
     let basePts = [];
+    // Reading the full base bitmap can OOM Safari and blank the plan canvas — skip on phone
+    // when the buffer is large; vector ops (already cached from the paint) are preferred.
     if (base._ok && base._key === viewKey() && base._r > 0.2) {
-      try {
-        const ctx = base.getContext('2d', { willReadFrequently: true });
-        const { width: W, height: Hh } = base; const data = ctx.getImageData(0, 0, W, Hh).data;
-        basePts = clusterOrange(data, W, Hh, 1 / base._r, 3, 2500);
-      } catch (e) { basePts = []; }
+      const { width: W, height: Hh } = base;
+      const tooBig = isPhoneDev && W * Hh > 1.2e6;
+      if (!tooBig) {
+        try {
+          const ctx = base.getContext('2d');
+          const data = ctx.getImageData(0, 0, W, Hh).data;
+          basePts = clusterOrange(data, W, Hh, 1 / base._r, 3, 2500);
+        } catch (e) { basePts = []; }
+      }
     }
     if (openBusy) return basePts;
     let page; try { page = await doc.pdf.getPage(pg); } catch (e) { return basePts; }
@@ -1875,9 +1984,14 @@ async function openPmproj(f) {
   openBusy = true;
   try { const { head, cad, bytes } = await readPmproj(f); await loadDoc(cad ? { cadPack: cad } : ownBytes(bytes), head.mime, head.name);
     proj = Object.assign({ origins: {}, hidden: {}, slab: {} }, head.proj); migrateProjectUnits(proj); resetHist(); $('#units').value = proj.units; if ($('#units2')) $('#units2').value = proj.units; page = 1; selId = null; draft = null; fitPage(); renderLayers();
-    await waitFirstPaint(2500); persistSoon(); toast('Opened ' + f.name); }
+    const painted = await waitFirstPaint(isPhoneDev ? 15000 : 6000); persistSoon();
+    toast(painted ? ('Opened ' + f.name) : ('Opened ' + f.name + ' — still drawing the plan…')); }
   catch (err) { console.error(err); toast('Could not open the project file: ' + err.message, 8000); }
-  finally { openBusy = false; scheduleWarmGeom(600, true); } }
+  finally {
+    openBusy = false;
+    if (base && base._ok) scheduleWarmGeom(800, true);
+    else scheduleRender(200);
+  } }
 $('#pmprojBtn').onclick = async () => { if (!proj || !doc) return toast('Open a plan first.'); toast('Building project file...', 20000); const b = await buildPmproj(); download(b, (proj.name || 'project') + '.pmproj', 'application/octet-stream'); toast('Saved ' + (b.size / 1e6).toFixed(1) + ' MB project file'); };
 Object.assign(window.PM, { buildPmproj });
 
