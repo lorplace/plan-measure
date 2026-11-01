@@ -43,6 +43,12 @@ let doc = null;          // {type,name,bytes,pdf,img,numPages,sizes:[{w,h}],vps:
 let proj = null;         // {id,name,units,scales:{},items:[]}
 let page = 1, zoom = 1, tool = 'select', draft = null, hover = null, selId = null;
 let renderTimer = null, shiftDown = false, guide = null, straightOn = localStorage.getItem('pm-straight') !== '0';
+// Site measure mode: Length / To wall / Pan / Calibrate primary; other tools under More. Default on for phone.
+let siteMode = localStorage.getItem('pm-site-mode') == null ? !!((typeof matchMedia === 'function') && matchMedia('(max-width:700px)').matches) : localStorage.getItem('pm-site-mode') !== '0';
+function applySiteMode() {
+  document.body.classList.toggle('site-mode', !!siteMode);
+  const b = $('#siteModeBtn'); if (b) { b.setAttribute('aria-pressed', String(!!siteMode)); b.classList.toggle('on', !!siteMode); }
+}
 
 // ---------- helpers ----------
 const uid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -185,7 +191,59 @@ function clampScale(w, h, s) {
 }
 // Base resolution: sharp up to about 1.5x the fit zoom, within the pixel budget (on a phone that is 1:1 with the screen at
 // fit, so the first full draw costs what it did before). Past that the detail layer takes over. Images are never drawn above their own size.
-function baseScale() { const { w, h } = doc.sizes[page]; let s = Math.min(Math.sqrt(BASE_MAX_PX / (w * h)), fitZoomOf(page) * renderDpr() * 1.5); if (doc.type === 'image') s = Math.min(s, 1); return clampScale(w, h, s); }
+function baseScale() { return baseScaleFor(page); }
+function baseScaleFor(pg) { const { w, h } = doc.sizes[pg]; let s = Math.min(Math.sqrt(BASE_MAX_PX / (w * h)), fitZoomOf(pg) * renderDpr() * 1.5); if (doc.type === 'image') s = Math.min(s, 1); return clampScale(w, h, s); }
+const pageBaseCache = Object.create(null); // pg -> { key, r, w, h, canvas }
+function clearPageBaseCache() {
+  for (const k of Object.keys(pageBaseCache)) {
+    try { pageBaseCache[k].canvas.width = pageBaseCache[k].canvas.height = 0; } catch (e) { }
+    delete pageBaseCache[k];
+  }
+}
+async function cachePageBase(pg, key) {
+  if (!doc || doc.type !== 'pdf' || !doc.sizes[pg]) return null;
+  const existing = pageBaseCache[pg];
+  if (existing && existing.key === key && existing.canvas && existing.canvas.width) return existing;
+  const { w, h } = doc.sizes[pg];
+  let r = baseScaleFor(pg);
+  r = clampScale(w, h, r);
+  const cw = Math.max(1, Math.ceil(w * r)), ch = Math.max(1, Math.ceil(h * r));
+  if (cw * ch > CANVAS_MAX_AREA || cw > CANVAS_MAX_DIM || ch > CANVAS_MAX_DIM) return null;
+  const c = document.createElement('canvas');
+  c.width = cw; c.height = ch;
+  const ctx = c.getContext('2d', { alpha: false });
+  if (!ctx) return null;
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
+  const job = { dead: false };
+  try { await paintRegion(ctx, cw, ch, { x0: 0, y0: 0, w, h }, r, job, pg); }
+  catch (e) { c.width = c.height = 0; return null; }
+  if (openBusy || !doc) { c.width = c.height = 0; return null; }
+  // Evict anything further than ±1 from current page
+  for (const k of Object.keys(pageBaseCache)) {
+    if (Math.abs(+k - page) > 1 && +k !== pg) {
+      try { pageBaseCache[k].canvas.width = pageBaseCache[k].canvas.height = 0; } catch (e) { }
+      delete pageBaseCache[k];
+    }
+  }
+  const entry = { key, r, w: cw, h: ch, canvas: c };
+  pageBaseCache[pg] = entry;
+  return entry;
+}
+function schedulePrefetchNeighbors() {
+  if (!doc || doc.type !== 'pdf' || openBusy) return;
+  const run = async () => {
+    if (!doc || openBusy) return;
+    for (const pg of [page - 1, page + 1]) {
+      if (pg < 1 || pg > doc.numPages) continue;
+      const key = doc.uid + ':' + pg + ':' + contentGen;
+      if (pageBaseCache[pg] && pageBaseCache[pg].key === key) continue;
+      try { await cachePageBase(pg, key); } catch (e) { }
+      await new Promise(r => setTimeout(r, 0));
+    }
+  };
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(() => { run(); }, { timeout: 4000 });
+  else setTimeout(run, 600);
+}
 function detailCap() { const d = renderDpr(); return isPhoneDev ? Math.max(2e6, Math.min(4e6, vpEl.clientWidth * vpEl.clientHeight * d * d * 1.5)) : 16e6; }
 const wantedScale = () => doc.type === 'image' ? Math.min(zoom * renderDpr(), 1) : zoom * renderDpr();
 // Visible part of the page in page units (null when the page is scrolled out of view)
@@ -241,8 +299,9 @@ function allocCanvasSize(c, cw, ch) {
   return c.width === cw && c.height === ch;
 }
 // Draws page region reg at r device px per page unit into ctx (cw x ch). Throws if the job is cancelled.
-async function paintRegion(ctx, cw, ch, reg, r, job) {
-  if (doc.type === 'pdf') { const p = await doc.pdf.getPage(page); if (job.dead) throw new Error('cancelled');
+async function paintRegion(ctx, cw, ch, reg, r, job, pgOpt) {
+  const pg = pgOpt != null ? pgOpt : page;
+  if (doc.type === 'pdf') { const p = await doc.pdf.getPage(pg); if (job.dead) throw new Error('cancelled');
     job.task = p.render({ canvasContext: ctx, viewport: p.getViewport({ scale: r }), transform: [1, 0, 0, 1, -reg.x0 * r, -reg.y0 * r] }); await job.task.promise; job.task = null; return; }
   ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
   if (doc.type === 'cad') CAD.draw(ctx, doc.cad, r, -reg.x0 * r, -reg.y0 * r, (proj && proj.hidden) || {}, reg);
@@ -255,6 +314,21 @@ function renderBase(key) {
   cancelJob(baseJob);
   const { w, h } = doc.sizes[page], job = baseJob = { key };
   job.promise = (async () => {
+    // Instant hit from ±1 prefetch cache
+    const hit = pageBaseCache[page];
+    if (hit && hit.key === key && hit.canvas && hit.canvas.width) {
+      if (!allocCanvasSize(base, hit.w, hit.h)) { /* fall through to normal */ }
+      else {
+        try {
+          const ctx = base.getContext('2d', { alpha: false });
+          ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.drawImage(hit.canvas, 0, 0);
+          base._key = key; base._r = hit.r; base._ok = true; placeCanvas();
+          if (baseJob === job) baseJob = null;
+          schedulePrefetchNeighbors();
+          return true;
+        } catch (e) { /* fall through */ }
+      }
+    }
     let r = baseScale();
     for (let attempt = 0; attempt < 5; attempt++) {
       if (job.dead || viewKey() !== key) return false;
@@ -278,6 +352,7 @@ function renderBase(key) {
       if (!canvasLooksPainted(base)) { console.warn('renderBase blank buffer', cw, 'x', ch); r *= 0.55; continue; }
       base._ok = true; placeCanvas();
       if (baseJob === job) baseJob = null;
+      schedulePrefetchNeighbors();
       return true;
     }
     if (baseJob === job) baseJob = null;
@@ -583,10 +658,29 @@ document.addEventListener('keydown', e => {
 document.addEventListener('keyup', e => { if (e.key === 'Shift') shiftDown = false; });
 
 // ---------- scale ----------
-Units.STD.forEach((s, i) => { const o = document.createElement('option'); o.value = i; o.textContent = s.name; $('#stdScale').appendChild(o); });
-$('#stdScale').value = Units.STD.findIndex(s => s.ratio === 48);
+function fillStdScales() {
+  const sel = $('#stdScale'); if (!sel) return;
+  const units = (proj && proj.units) || $('#units').value || Units.DEFAULT_UNITS;
+  const metric = Units.isMet(units);
+  const indexed = Units.STD.map((s, i) => ({ s, i }));
+  const ordered = metric
+    ? indexed.filter(x => x.s.name.startsWith('1:')).concat(indexed.filter(x => !x.s.name.startsWith('1:')))
+    : indexed.filter(x => !x.s.name.startsWith('1:')).concat(indexed.filter(x => x.s.name.startsWith('1:')));
+  const prev = sel.value;
+  sel.innerHTML = '';
+  ordered.forEach(({ s, i }) => { const o = document.createElement('option'); o.value = i; o.textContent = s.name; sel.appendChild(o); });
+  // Prefer previous if still present; else 1:50 (metric) or 1/4"=1'-0" (imperial)
+  if (prev !== '' && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+  else {
+    const prefer = metric ? Units.STD.findIndex(s => s.name === '1:50') : Units.STD.findIndex(s => s.ratio === 48);
+    sel.value = prefer >= 0 ? prefer : ordered[0].i;
+  }
+}
+fillStdScales();
+$('#units').addEventListener('change', fillStdScales);
+if ($('#units2')) $('#units2').addEventListener('change', fillStdScales);
 function applyScale(mPerUnit, name, all) { const pgs = all ? Array.from({ length: doc.numPages }, (_, i) => i + 1) : [page]; proj.scaleNames = proj.scaleNames || {}; pgs.forEach(p => { proj.scales[p] = mPerUnit; proj.scaleNames[p] = name; }); layout(); persistSoon(); commitHist(); toast('Scale set: ' + name); }
-$('#scaleBtn').onclick = () => { if (!doc) return toast('Open a plan first'); $('#imgDpiRow').hidden = doc.type !== 'image'; $('#cadUnitRow').hidden = doc.type !== 'cad'; $('#stdScaleRow').hidden = doc.type === 'cad'; $('#calInstead').hidden = doc.type === 'cad'; $('#scaleDlg').showModal(); };
+$('#scaleBtn').onclick = () => { if (!doc) return toast('Open a plan first'); fillStdScales(); $('#imgDpiRow').hidden = doc.type !== 'image'; $('#cadUnitRow').hidden = doc.type !== 'cad'; $('#stdScaleRow').hidden = doc.type === 'cad'; $('#calInstead').hidden = doc.type === 'cad'; $('#scaleDlg').showModal(); };
 $('#calInstead').onclick = () => { $('#scaleDlg').close('cancel'); setTool('calibrate'); toast('Click two points of a known distance on the plan.', 4000); };
 $('#scaleDlg').addEventListener('close', () => { if ($('#scaleDlg').returnValue !== 'ok') return; if (doc.type === 'cad') { const u = +$('#cadUnit').value; return applyScale(CAD.UNIT_M[u] / doc.cad.k, 'CAD units: ' + CAD.UNIT_NAME[u], false); }
   const s = Units.STD[$('#stdScale').value];
@@ -779,12 +873,37 @@ phoneMQ.addEventListener('change', placeDrawControls);
 const _draw = draw; draw = function () { _draw(); updateDrawBar(); updateSheet(); };
 $('#cancelBtn').onclick = () => { if (draft) { draft = null; hover = null; draw(); } else setTool('select'); };
 function closeMoreMenu() { $('#moreMenu').hidden = true; $('#moreBackdrop').hidden = true; document.body.classList.remove('menuopen'); $('#moreBtn').setAttribute('aria-expanded', 'false'); }
+(function wireSiteMode() {
+  applySiteMode();
+  document.addEventListener('DOMContentLoaded', applySiteMode);
+  // Toggle is wired after moreMenu markup exists
+  setTimeout(() => {
+    const b = $('#siteModeBtn');
+    if (!b) return;
+    b.onclick = () => {
+      siteMode = !siteMode;
+      localStorage.setItem('pm-site-mode', siteMode ? '1' : '0');
+      applySiteMode();
+      toast(siteMode ? 'Site measure mode on — Length, Pan, Calibrate up front.' : 'All tools shown.');
+    };
+  }, 0);
+})();
 function openMoreMenu() { closeExportMenu(); $('#redoMenu').disabled = $('#redoBtn').disabled; $('#units2').value = $('#units').value; $('#moreMenu').hidden = false; $('#moreBackdrop').hidden = false; document.body.classList.add('menuopen'); $('#moreMenu .mscroll').scrollTop = 0; $('#moreBtn').setAttribute('aria-expanded', 'true'); }
 $('#moreBtn').onclick = e => { e.stopPropagation(); if ($('#moreMenu').hidden) openMoreMenu(); else closeMoreMenu(); };
 $('#moreBackdrop').onclick = () => closeMoreMenu();
 document.addEventListener('click', e => { if (!$('#moreMenu').hidden && !e.target.closest('#moreMenu,#moreBtn,#moreBackdrop')) closeMoreMenu(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#moreMenu').hidden) { e.preventDefault(); closeMoreMenu(); } });
-$('#moreMenu').addEventListener('click', e => { const b = e.target.closest('[data-proxy]'); if (!b) return; closeMoreMenu(); $(b.dataset.proxy).click(); });
+$('#moreMenu').addEventListener('click', e => {
+  const t = e.target.closest('[data-set-tool]');
+  if (t) {
+    closeMoreMenu();
+    const name = t.dataset.setTool;
+    if (name === 'zone') { const z = $('#zoneTool'); if (z) z.click(); else setTool('area'); }
+    else setTool(name);
+    return;
+  }
+  const b = e.target.closest('[data-proxy]'); if (!b) return; closeMoreMenu(); $(b.dataset.proxy).click();
+});
 $('#moreMenu').addEventListener('touchmove', e => { if (!e.target.closest('.mscroll')) e.preventDefault(); }, { passive: false });
 $('#units2').addEventListener('change', e => { $('#units').value = e.target.value; $('#units').dispatchEvent(new Event('change')); });
 $('#scaleInfo').onclick = () => $('#scaleBtn').click();
@@ -943,10 +1062,13 @@ function mergeCollinearSegs(segs, gapTol, axisTol) {
   };
   return merge(H, true).concat(merge(V, false));
 }
-function installWallIndex(G, segs) {
-  const merged = mergeCollinearSegs(segs.map(s => s.slice(0, 4)), Math.max(28, 0.03 * Math.min(doc.sizes[page].w, doc.sizes[page].h)), Math.max(3, 0.003 * Math.min(doc.sizes[page].w, doc.sizes[page].h)));
+function installWallIndex(G, segs, pg) {
+  pg = pg != null ? pg : ((G && G._pg) || page);
+  const sz = doc.sizes[pg] || doc.sizes[page];
+  const merged = mergeCollinearSegs(segs.map(s => s.slice(0, 4)), Math.max(28, 0.03 * Math.min(sz.w, sz.h)), Math.max(3, 0.003 * Math.min(sz.w, sz.h)));
   G.wallPx = new Float64Array(merged.length * 4); G.wallN = merged.length; G.wallGrid = new Map();
   for (let i = 0; i < merged.length; i++) { const o = 4 * i, s = merged[i]; G.wallPx[o] = s[0]; G.wallPx[o + 1] = s[1]; G.wallPx[o + 2] = s[2]; G.wallPx[o + 3] = s[3]; gridAdd(G.wallGrid, i, s[0], s[1], s[2], s[3]); }
+  G.wallsReady = true;
 }
 async function buildGeom(pg) {
   if (geomCache[pg]) return geomCache[pg];
@@ -985,30 +1107,56 @@ async function buildGeom(pg) {
     }
     // Phone: never force a second full parse (Safari OOM on big CAD PDFs)
     if (!ops) {
-      if (isPhoneDev) { installWallIndex(G, []); G.ready = true; return G; }
+      if (isPhoneDev) { installWallIndex(G, [], pg); G.wallsReady = false; G.ready = true; return G; }
       ops = await page.getOperatorList();
     }
   } catch (e) { if (geomCache[pg] === G) delete geomCache[pg]; return G; }
   if (doc !== d) { if (geomCache[pg] === G) delete geomCache[pg]; return G; }
   if (openBusy) { if (geomCache[pg] === G) delete geomCache[pg]; return G; } // open still in progress: retry later
-  // iPhone: multi-million-op CAD sheets OOM Safari if we walk the operator list here.
-  // Mark ready with empty walls; sleeve anchors come from the already-drawn base bitmap.
-  if (isPhoneDev && ops && ops.fnArray.length > 350000) {
-    installWallIndex(G, []);
-    G.ready = true; return G;
+  G._pg = pg;
+  // Heavy phone PDFs: mark ready immediately so sleeves can index, then fill walls in
+  // idle chunks from the already-cached operator list (never leave wallN=0 forever).
+  const heavyPhone = isPhoneDev && ops && ops.fnArray.length > 350000;
+  if (heavyPhone) {
+    installWallIndex(G, [], pg);
+    G.wallsReady = false;
+    G.ready = true;
+    G._wallGen = (G._wallGen || 0) + 1;
+    const gen = G._wallGen;
+    fillWallsFromOps(G, d, pg, ops, gen).then(() => {
+      if (geomCache[pg] !== G || G._wallGen !== gen) return;
+      syncToWallUi();
+    }).catch(e => console.warn('fillWallsFromOps', e));
+    return G;
+  }
+  await fillWallsFromOps(G, d, pg, ops, 0);
+  G.ready = true; return G;
+}
+async function fillWallsFromOps(G, d, pg, ops, gen) {
+  // Chunked operator walk → segment grid + merged wall index. Safe on phone: yields often,
+  // caps segment count, skips hairline noise. gen=0 means synchronous caller owns G.ready.
+  if (!ops || !ops.fnArray || !ops.fnArray.length) {
+    installWallIndex(G, [], pg); G.wallsReady = true; return G;
   }
   const vp = d.vps[pg], OPS = pdfjsLib.OPS, U = pdfjsLib.Util;
-  // Segments go into one Float64Array (x1 y1 x2 y2 each) rather than an array per segment, and points are transformed
-  // without allocating: the old version created two arrays per path point.
-  const MAXS = 200000; let sx = new Float64Array(4 * 4096), n = 0, ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm); const stack = [];
+  const heavy = isPhoneDev && ops.fnArray.length > 350000;
+  // Phone heavy: fewer segs, longer min length (walls only). Desktop: full snap grid.
+  const MAXS = heavy ? 120000 : 200000;
+  const minLen = heavy ? Math.max(2.5, 0.004 * Math.min(doc.sizes[pg].w, doc.sizes[pg].h)) : 0.05;
+  let sx = new Float64Array(4 * 4096), n = 0, ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm); const stack = [];
   const setCtm = m => { ctm = m; M = U.transform(vp.transform, m); };
-  const add = (x1, y1, x2, y2) => { if (n >= MAXS || Math.abs(x1 - x2) + Math.abs(y1 - y2) <= 0.05) return;
+  const add = (x1, y1, x2, y2) => {
+    if (n >= MAXS) return;
+    const L = Math.hypot(x2 - x1, y2 - y1);
+    if (L <= minLen) return;
     if (4 * n + 4 > sx.length) { const b = new Float64Array(Math.min(4 * MAXS, sx.length * 2)); b.set(sx); sx = b; }
-    const o = 4 * n++; sx[o] = x1; sx[o + 1] = y1; sx[o + 2] = x2; sx[o + 3] = y2; };
-  const GEOM_CHUNK = isPhoneDev ? 8000 : 80000;
+    const o = 4 * n++; sx[o] = x1; sx[o + 1] = y1; sx[o + 2] = x2; sx[o + 3] = y2;
+  };
+  const GEOM_CHUNK = isPhoneDev ? (heavy ? 4000 : 8000) : 80000;
   for (let i = 0; i < ops.fnArray.length && n < MAXS; i++) {
     if (i && (i % GEOM_CHUNK) === 0) {
-      if (doc !== d || openBusy) { if (geomCache[pg] === G) delete geomCache[pg]; return G; }
+      if (doc !== d || openBusy) { if (geomCache[pg] === G && !gen) delete geomCache[pg]; return G; }
+      if (gen && G._wallGen !== gen) return G;
       await new Promise(r => setTimeout(r, 0));
     }
     const fn = ops.fnArray[i], args = ops.argsArray[i];
@@ -1016,24 +1164,27 @@ async function buildGeom(pg) {
     else if (fn === OPS.transform) setCtm(U.transform(ctm, args));
     else if (fn === OPS.paintFormXObjectBegin) { stack.push(ctm); if (args[0]) setCtm(U.transform(ctm, args[0])); }
     else if (fn === OPS.paintFormXObjectEnd) { if (stack.length) setCtm(stack.pop()); }
-    else if (fn === OPS.constructPath) { const sub = args[0], co = args[1], [a, b, c, d, e, f] = M; let j = 0, cur = false, cx = 0, cy = 0, st = false, s0x = 0, s0y = 0;
+    else if (fn === OPS.constructPath) { const sub = args[0], co = args[1], [a, b, c, d0, e, f] = M; let j = 0, cur = false, cx = 0, cy = 0, st = false, s0x = 0, s0y = 0;
       for (const op of sub) {
-        if (op === OPS.moveTo) { const x = co[j], y = co[j + 1]; j += 2; cx = s0x = a * x + c * y + e; cy = s0y = b * x + d * y + f; cur = st = true; }
-        else if (op === OPS.lineTo || op === OPS.curveTo || op === OPS.curveTo2 || op === OPS.curveTo3) { // curves snap along their chord, as before
+        if (op === OPS.moveTo) { const x = co[j], y = co[j + 1]; j += 2; cx = s0x = a * x + c * y + e; cy = s0y = b * x + d0 * y + f; cur = st = true; }
+        else if (op === OPS.lineTo || op === OPS.curveTo || op === OPS.curveTo2 || op === OPS.curveTo3) {
           const k = op === OPS.lineTo ? 0 : op === OPS.curveTo ? 4 : 2, x = co[j + k], y = co[j + k + 1]; j += k + 2;
-          const nx = a * x + c * y + e, ny = b * x + d * y + f; if (cur) add(cx, cy, nx, ny); cx = nx; cy = ny; cur = true; }
+          const nx = a * x + c * y + e, ny = b * x + d0 * y + f; if (cur) add(cx, cy, nx, ny); cx = nx; cy = ny; cur = true; }
         else if (op === OPS.rectangle) { const x = co[j], y = co[j + 1], w = co[j + 2], h = co[j + 3]; j += 4;
-          const X = (u, v) => a * u + c * v + e, Y = (u, v) => b * u + d * v + f, x1 = X(x, y), y1 = Y(x, y), x2 = X(x + w, y), y2 = Y(x + w, y), x3 = X(x + w, y + h), y3 = Y(x + w, y + h), x4 = X(x, y + h), y4 = Y(x, y + h);
+          const X = (u, v) => a * u + c * v + e, Y = (u, v) => b * u + d0 * v + f, x1 = X(x, y), y1 = Y(x, y), x2 = X(x + w, y), y2 = Y(x + w, y), x3 = X(x + w, y + h), y3 = Y(x + w, y + h), x4 = X(x, y + h), y4 = Y(x, y + h);
           add(x1, y1, x2, y2); add(x2, y2, x3, y3); add(x3, y3, x4, y4); add(x4, y4, x1, y1); cx = s0x = x1; cy = s0y = y1; cur = st = true; }
         else if (op === OPS.closePath) { if (cur && st) add(cx, cy, s0x, s0y); cur = st; cx = s0x; cy = s0y; }
       } } }
+  if (gen && G._wallGen !== gen) return G;
+  if (doc !== d) return G;
   sx = sx.slice(0, 4 * n); G.px = sx;
   G.segs = new Proxy({ length: n }, { get: (o, k) => k === 'length' ? n : (typeof k === 'string' && /^\d+$/.test(k)) ? [sx[4 * k], sx[4 * k + 1], sx[4 * k + 2], sx[4 * k + 3]] : undefined });
+  G.grid = new Map();
   for (let i = 0; i < n; i++) gridAdd(G.grid, i, sx[4 * i], sx[4 * i + 1], sx[4 * i + 2], sx[4 * i + 3]);
-  // Merged axis walls for sleeve→perp (dashed/broken lines become continuous)
   const raw = []; for (let i = 0; i < n; i++) raw.push([sx[4 * i], sx[4 * i + 1], sx[4 * i + 2], sx[4 * i + 3]]);
-  installWallIndex(G, raw);
-  G.ready = true; return G;
+  installWallIndex(G, raw, pg);
+  G.wallsReady = true;
+  return G;
 }
 function cachedOps(page) { try { for (const st of page._intentStates.values()) { const o = st.operatorList; if (o && o.lastChunk && o.fnArray.length) return o; } } catch (e) { } return null; }
 function nearSegs(G, p, r) { const out = new Set(); const c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
@@ -1200,7 +1351,7 @@ function scanOrangeFromPix(G) {
   const { width: W, height: Hh, data } = G.pix;
   return clusterOrange(data, W, Hh, 1, 4, 2500);
 }
-async function scanOrangeFromPdfOps(pg, opsIn) {
+async function scanOrangeFromPdfOps(pg, opsIn, onProg) {
   // Colour-independent sleeve/anchor centres from the pdf.js operator list:
   //  - crosshair intersections (short H∩V arms — purple circles, black targets, any colour)
   //  - compact bezier circles / small squares (Hilti) / compact closed diamonds
@@ -1267,9 +1418,13 @@ async function scanOrangeFromPdfOps(pg, opsIn) {
     else if (ax < 0.28 * L && ay > 0.75 * L) shortV.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, L]);
   };
   const CHUNK = isPhoneDev ? 4000 : 40000;
-  for (let i = 0; i < ops.fnArray.length; i++) {
+  const total = ops.fnArray.length;
+  let lastPct = -1;
+  for (let i = 0; i < total; i++) {
     if (i && (i % CHUNK) === 0) {
       if (openBusy || !doc) return [];
+      const pct = Math.round(100 * i / total);
+      if (onProg && pct !== lastPct) { lastPct = pct; onProg(pct, null); }
       await new Promise(r => setTimeout(r, 0));
     }
     const fn = ops.fnArray[i], args = ops.argsArray[i];
@@ -1415,10 +1570,11 @@ async function scanOrangeFromPdfRasterTiled(pg) {
   }
   return dedupePts(pts, Math.max(2, 8e-4 * Math.max(w, h)));
 }
-async function scanOrangeFromPdf(pg) {
+async function scanOrangeFromPdf(pg, onProg) {
   // Opening stays free (caller runs after openBusy). Prefer cached operator-list geometry
   // (colour-independent); merge with base orange raster; never skip the vector walk when
   // ops are already cached — chunked yields keep the UI alive on phone.
+  // onProg(pct, interimPts?): viewport-first — base raster publishes first, then vector %.
   try {
     let basePts = [];
     // Reading the full base bitmap can OOM Safari and blank the plan canvas — skip on phone
@@ -1434,18 +1590,21 @@ async function scanOrangeFromPdf(pg) {
         } catch (e) { basePts = []; }
       }
     }
+    if (basePts.length) {
+      basePts._kinds = basePts.map(() => 'raster');
+      if (onProg) onProg(8, basePts);
+    } else if (onProg) onProg(2, null);
     if (openBusy) return basePts;
     let page; try { page = await doc.pdf.getPage(pg); } catch (e) { return basePts; }
     const cached = cachedOps(page);
     let vec = [];
-    if (cached) vec = await scanOrangeFromPdfOps(pg, cached);
-    else if (!isPhoneDev) vec = await scanOrangeFromPdfOps(pg, null);
+    const vecProg = (pct, interim) => { if (onProg) onProg(8 + Math.round(pct * 0.9), interim || basePts); };
+    if (cached) vec = await scanOrangeFromPdfOps(pg, cached, vecProg);
+    else if (!isPhoneDev) vec = await scanOrangeFromPdfOps(pg, null, vecProg);
     if (vec.length >= 10) {
       if (basePts.length) {
         const merged = vec.concat(basePts);
-        const mk = (vec._kinds || vec.map(() => 'anchor')).concat(basePts.map(() => 'raster'));
         const out = dedupePts(merged, Math.max(1.2, 5e-4 * Math.max(doc.sizes[pg].w, doc.sizes[pg].h)));
-        // approximate kinds: prefer vector
         out._kinds = out.map(() => 'anchor');
         if (vec._kinds) {
           const cell = 2, g = new Map();
@@ -1474,24 +1633,48 @@ async function scanOrangeFromPdf(pg) {
     return best;
   } catch (e) { console.warn('scanOrangeFromPdf', e); return []; }
 }
-async function ensureSleeveSnap(pg) {
+async function ensureSleeveSnap(pg, onProg) {
   try {
     if (openBusy) return geomCache[pg] || { ready: false };
     const G = await buildGeom(pg); if (!G || !G.ready || openBusy) return G || { ready: false };
     if (G.sleeve && G.sleeve.gen === contentGen && G.sleeve.page === pg && G.sleeve.n >= 0) return G;
-    const pts = [];
-    const kinds = [];
-    if (proj) for (const it of proj.items) if (it.type === 'sleeve' && it.page === pg && it.pts && it.pts[0]) { pts.push(it.pts[0]); kinds.push('markup'); }
-    if (doc.type === 'cad') { const c = collectCadSleevePts(); for (const p of c) { pts.push(p); kinds.push('cad'); } }
-    else if (doc.type === 'image') { const c = scanOrangeFromPix(G); for (const p of c) { pts.push(p); kinds.push('raster'); } }
-    else if (doc.type === 'pdf') {
-      const c = await scanOrangeFromPdf(pg);
-      const ck = c._kinds || null;
-      for (let i = 0; i < c.length; i++) { pts.push(c[i]); kinds.push(ck ? ck[i] : 'anchor'); }
+    const basePts = [], baseKinds = [];
+    if (proj) for (const it of proj.items) if (it.type === 'sleeve' && it.page === pg && it.pts && it.pts[0]) { basePts.push(it.pts[0]); baseKinds.push('markup'); }
+    const publish = (extra, ekinds) => {
+      const pts = basePts.slice(), kinds = baseKinds.slice();
+      if (extra) for (let i = 0; i < extra.length; i++) { pts.push(extra[i]); kinds.push(ekinds ? ekinds[i] : 'anchor'); }
+      pts._kinds = kinds;
+      buildSleeveIndex(G, pts);
+      if (onProg) onProg(G._sleevePct || 0, G.sleeve.n);
+      return G;
+    };
+    if (doc.type === 'cad') {
+      const c = collectCadSleevePts();
+      publish(c, c.map(() => 'cad'));
+      if (onProg) onProg(100, G.sleeve.n);
+      return G;
     }
-    if (openBusy) return G;
-    pts._kinds = kinds;
-    buildSleeveIndex(G, pts); return G;
+    if (doc.type === 'image') {
+      const c = scanOrangeFromPix(G);
+      publish(c, c.map(() => 'raster'));
+      if (onProg) onProg(100, G.sleeve.n);
+      return G;
+    }
+    if (doc.type === 'pdf') {
+      // Viewport-first: publish base-raster hits immediately, then refine with vector walk + %.
+      const c = await scanOrangeFromPdf(pg, (pct, interim) => {
+        G._sleevePct = pct;
+        if (interim && interim.length) publish(interim, interim._kinds);
+        else if (onProg) onProg(pct, G.sleeve ? G.sleeve.n : 0);
+      });
+      if (openBusy) return G;
+      const ck = c._kinds || null;
+      publish(c, ck || c.map(() => 'anchor'));
+      if (onProg) onProg(100, G.sleeve.n);
+      return G;
+    }
+    publish(null, null);
+    return G;
   } catch (e) { console.warn('ensureSleeveSnap', e); return geomCache[pg] || { ready: false }; }
 }
 function nearSleevePts(G, p, r) {
@@ -1575,8 +1758,10 @@ function findSnap(p, r, exclude, opts) {
   opts = opts || {};
   // 1) Sleeve / anchor centres — STRICT priority: if any are in range, they win over
   // every line endpoint / arrowhead / markup, even when those are closer to the aim point.
+  // Use opts.sleeveR (capped page-space) when provided so fit-zoom empty taps do not snap.
   if (G && G.sleeve) {
-    const near = nearSleevePts(G, p, r);
+    const sr = opts.sleeveR != null ? opts.sleeveR : r;
+    const near = nearSleevePts(G, p, sr);
     if (near.length) {
       // Closest sleeve/anchor centre wins. Only average sub-pixel duplicates of the
       // SAME symbol (tol ~2.5 CSS units) — never blend neighbouring distinct anchors.
@@ -1619,6 +1804,14 @@ function findSnap(p, r, exclude, opts) {
       consider(q, 'line', 2); } }
   return best;
 }
+function sleeveSnapRadius(touchR) {
+  // Cap page-space radius so empty taps at fit zoom do not pull to a distant sleeve,
+  // while keeping a generous CSS hit target when actually near one (and when zoomed in).
+  const rCss = touchR ? 30 : 14;
+  const r = rCss / zoom;
+  const cap = touchR ? 26 : 14; // page units — ~avg NN spacing on dense sheets is ~4
+  return Math.min(r, cap);
+}
 function aim(p, e, prev, exclude) {
   let q = p; const ortho = prev && (e.shiftKey || shiftDown);
   if (ortho) q = snapOrtho(prev, q);
@@ -1628,8 +1821,9 @@ function aim(p, e, prev, exclude) {
   if (st) q = st.q;
   if (snapOn && !e.altKey && doc && proj) {
     if (!geomCache[page]) buildGeom(page);
-    // Generous radius so sleeve centre dots are easy to hit on a phone (dots are ~11 CSS px across)
+    // Line/end snap stays generous; sleeves use a capped page-space radius (see sleeveSnapRadius)
     const r = (touchR ? 30 : 14) / zoom;
+    const sleeveR = sleeveSnapRadius(touchR);
     const fromSleeve = !!(prev && tool === 'line' && isSleeveCentrePt(prev, Math.max(4 / zoom, 1)));
     if (fromSleeve) {
       // Hard lock: second point is always the perpendicular foot in the finger's direction (never empty space)
@@ -1640,7 +1834,7 @@ function aim(p, e, prev, exclude) {
         wallExt = hit.ext ? { a: hit.ext[0].slice(), b: hit.ext[1].slice() } : null;
       }
     } else {
-      const h = findSnap(ortho ? q : p, r, exclude, null);
+      const h = findSnap(ortho ? q : p, r, exclude, { sleeveR });
       if (h) { snapHit = { p: h.p.slice(), kind: h.kind === 'sleeve' ? 'center' : h.kind }; q = h.p.slice();
         wallExt = null;
         if (ortho) { const hz = Math.abs(p[0] - prev[0]) >= Math.abs(p[1] - prev[1]); q = hz ? [h.p[0], prev[1]] : [prev[0], h.p[1]]; snapHit.p = q; }
@@ -1675,11 +1869,26 @@ function drawWallExtSvg(g) {
 function syncToWallUi() {
   const show = !!(tool === 'line' && draft && draft.type === 'line' && draft.pts.length === 1 && isSleeveCentrePt(draft.pts[0], Math.max(4 / zoom, 1)));
   document.body.classList.toggle('towall', show);
-  const b = $('#toWallBtn'); if (b) { b.hidden = !show; if (show) b.textContent = 'To wall'; }
+  const b = $('#toWallBtn'); if (!b) return;
+  b.hidden = !show;
+  if (!show) return;
+  const G = geomCache[page];
+  const wallsOk = !!(G && G.ready && G.wallsReady !== false && G.wallN > 0);
+  if (!wallsOk) {
+    b.disabled = true;
+    b.setAttribute('aria-busy', 'true');
+    b.textContent = 'Finding walls…';
+  } else {
+    b.disabled = false;
+    b.removeAttribute('aria-busy');
+    b.textContent = 'To wall';
+  }
 }
 function applyToWall(toward) {
   if (!(tool === 'line' && draft && draft.pts.length === 1)) return false;
-  if (!geomCache[page] || !geomCache[page].ready) { toast('Still preparing the drawing…'); return false; }
+  const G0 = geomCache[page];
+  if (!G0 || !G0.ready) { toast('Still preparing the drawing…'); return false; }
+  if (G0.wallsReady === false || !(G0.wallN > 0)) { toast('Still finding walls…'); return false; }
   const hit = nearestPerpWall(draft.pts[0], toward || null, Math.max(doc.sizes[page].w, doc.sizes[page].h));
   if (!hit) { toast('No wall or line nearby to measure to.'); return false; }
   draft.pts.push(hit.foot.slice());
@@ -1690,7 +1899,7 @@ function applyToWall(toward) {
 }
 $('#toWallBtn').onclick = () => applyToWall(null);
 const _draw3 = draw; draw = function () { _draw3(); if (snapHit && (PLACE.includes(tool) || ['count', 'sleeve', 'origin'].includes(tool) || gesture)) showSnapMark(); };
-const _loadDoc = loadDoc; loadDoc = async function (...a) { for (const k in geomCache) delete geomCache[k]; const r = await _loadDoc(...a); return r; };
+const _loadDoc = loadDoc; loadDoc = async function (...a) { for (const k in geomCache) delete geomCache[k]; clearPageBaseCache(); const r = await _loadDoc(...a); return r; };
 vpEl.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !gesture) { snapHit = null; showSnapMark(); } });
 window.PMsnap = { buildGeom: pg => buildGeom(pg), ensureSleeveSnap: pg => ensureSleeveSnap(pg), findSnap, nearestPerpWall, isSleeveCentrePt, applyToWall, mergeCollinearSegs, get hit() { return snapHit; }, get wallExt() { return wallExt; }, geom: geomCache };
 // Snap geometry is built when something uses it: CAD drawings, a page with sleeves, or a measuring tool in hand.
@@ -1712,13 +1921,26 @@ function idleWarmGeom(gen) {
   if (typeof requestIdleCallback === 'function') requestIdleCallback(() => kick(), { timeout: 1200 });
   else setTimeout(kick, 0);
 }
+function sleeveFoundLabel(n) {
+  if (!n) return '';
+  return n + ' sleeve' + (n === 1 ? '' : 's') + ' found';
+}
 function warmGeomNow(gen) {
   if (gen !== warmGen || openBusy || !doc) return;
   const pg = page, d = doc;
-  setSleeveStatus('Finding sleeves…');
-  const done = () => { if (gen === warmGen) setSleeveStatus(''); };
-  const go = () => ensureSleeveSnap(pg).then(() => { if (gen !== warmGen || doc !== d) return; done(); draw(); }).catch(e => { console.warn('sleeve snap', e); done(); });
-  const start = () => { if (gen !== warmGen || doc !== d || openBusy) { done(); return; } if (!geomCache[pg]) buildGeom(pg).then(go).catch(e => { console.warn('buildGeom', e); done(); }); else go(); };
+  setSleeveStatus('Finding sleeves… 0%');
+  const done = (G) => {
+    if (gen !== warmGen) return;
+    const n = G && G.sleeve && G.sleeve.n;
+    setSleeveStatus(n ? sleeveFoundLabel(n) : '');
+  };
+  const onProg = (pct, n) => {
+    if (gen !== warmGen) return;
+    const p = Math.max(0, Math.min(99, pct | 0));
+    setSleeveStatus(n ? ('Finding sleeves… ' + p + '% · ' + sleeveFoundLabel(n)) : ('Finding sleeves… ' + p + '%'));
+  };
+  const go = () => ensureSleeveSnap(pg, onProg).then(G => { if (gen !== warmGen || doc !== d) return; done(G); draw(); syncToWallUi(); }).catch(e => { console.warn('sleeve snap', e); done(null); });
+  const start = () => { if (gen !== warmGen || doc !== d || openBusy) { done(null); return; } if (!geomCache[pg]) buildGeom(pg).then(go).catch(e => { console.warn('buildGeom', e); done(null); }); else go(); };
   // One more idle slice so first interaction after open stays smooth
   if (typeof requestIdleCallback === 'function') requestIdleCallback(() => start(), { timeout: 2000 });
   else setTimeout(start, 0);
@@ -1887,8 +2109,10 @@ function sleeveCounts() {
 }
 function renderSleeveCount() {
   const c = sleeveCounts(), isCad = doc && doc.type === 'cad', tbl = (title, head, rows) => `<h4>${title}</h4><table><tr><th>${head}</th><th class="n">Count</th></tr>` + rows.map(([k, n]) => `<tr><td>${esc(String(k))}</td><td class="n">${n}</td></tr>`).join('') + '</table>';
-  $('#slvBody').innerHTML = c.total ? `<div class="total" id="slvTotal">${c.total}</div><small>sleeve${c.total > 1 ? 's' : ''} in total</small>` + tbl('By size', 'Size', c.bySize) + tbl('By layer', 'Layer', c.byLayer) + (c.byLevel.length > 1 || !isCad ? tbl('By level / page', 'Level', c.byLevel) : '')
-    : `<div class="total" id="slvTotal">0</div><p class="empty">No sleeves placed yet. ${isCad ? 'Use Find sleeves to pick up sleeves drawn in this CAD file, or place them with the Sleeve tool.' : 'Place them with the Sleeve tool.'}</p>`;
+  const found = (geomCache[page] && geomCache[page].sleeve && geomCache[page].sleeve.n) || 0;
+  const foundLine = found ? `<p class="found-snap"><b>${found}</b> sleeve${found === 1 ? '' : 's'} found on this page <small>(snap targets on the plan — not yet placed)</small></p>` : (doc && doc.type === 'pdf' ? '<p class="found-snap muted">No snap targets indexed yet on this page.</p>' : '');
+  $('#slvBody').innerHTML = foundLine + (c.total ? `<div class="total" id="slvTotal">${c.total}</div><small>sleeve${c.total > 1 ? 's' : ''} placed in project</small>` + tbl('By size', 'Size', c.bySize) + tbl('By layer', 'Layer', c.byLayer) + (c.byLevel.length > 1 || !isCad ? tbl('By level / page', 'Level', c.byLevel) : '')
+    : `<div class="total" id="slvTotal">0</div><p class="empty">No sleeves placed yet. ${isCad ? 'Use Find sleeves to pick up sleeves drawn in this CAD file, or place them with the Sleeve tool.' : 'Place them with the Sleeve tool, or tap a found snap target.'}</p>`);
   $('#slvFind').hidden = !isCad; $('#slvFind').classList.toggle('primary', isCad && !c.total); $('#slvCsv').disabled = !c.total;
 }
 function openSleeveCount() { if (!proj) return toast('Open a plan first.'); renderSleeveCount(); const d = $('#slvDlg'); if (!d.open) d.showModal(); }
