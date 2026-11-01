@@ -689,3 +689,14 @@ input,textarea,select,[contenteditable]{-webkit-user-select:text;user-select:tex
   #printImg{display:block!important;width:100%!important;height:auto!important;max-width:100%!important;max-height:none!important;margin:0!important;object-fit:contain!important}
   #moreMenu,#moreBackdrop,#printBar,#printOverlay,#printPreview,#toast,#loupe,#selBar,#undoToast,#tools,#drawBar,#side,#main,#bar,#exportMenu,#dropOverlay{display:none!important;visibility:hidden!important}
 }
+
+/* Site measure mode: Length, Pan, Calibrate (+ Select, Count) primary; rest under More */
+body.site-mode #tools .tool.site-extra,
+body.site-mode #tools .sep.site-extra,
+body.site-mode #zoneTool{display:none!important}
+body:not(.site-mode) .site-more-tools{display:none}
+#toWallBtn:disabled, #toWallBtn[aria-busy=true]{opacity:.72;cursor:wait;background:#546e7a;border-color:#455a64}
+#slvBody .found-snap{margin:0 0 10px;padding:8px 10px;border-radius:8px;background:var(--ok-soft);color:var(--ok);font-size:13.5px}
+#slvBody .found-snap.muted{background:var(--chrome-2);color:var(--ink-2)}
+#slvBody .found-snap small{display:block;margin-top:2px;font-weight:400;opacity:.85}
+#siteModeBtn.on{font-weight:700}

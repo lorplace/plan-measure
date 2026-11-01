@@ -52,6 +52,17 @@
       <button type="button" class="btn" data-icon="redo" data-proxy="#redoBtn" id="redoMenu">Redo</button>
       <button type="button" class="btn" data-icon="ruler" data-proxy="#scaleBtn">Set scale</button>
       <button type="button" class="btn" data-icon="fit" data-proxy="#fit">Fit page</button>
+      <button type="button" class="btn" data-icon="ruler" id="siteModeBtn" aria-pressed="false" title="Show Length, Pan, Calibrate up front; other tools under More">Site measure mode</button>
+    </div>
+    <div class="msec needdoc site-more-tools">
+      <div class="mlabel">More tools</div>
+      <button type="button" class="btn" data-icon="poly" data-set-tool="poly">Pipe run</button>
+      <button type="button" class="btn" data-icon="area" data-set-tool="area">Area</button>
+      <button type="button" class="btn" data-icon="count" data-set-tool="count">Tally fixtures</button>
+      <button type="button" class="btn" data-icon="sleeve" data-set-tool="sleeve">Sleeve</button>
+      <button type="button" class="btn" data-icon="origin" data-set-tool="origin">Origin</button>
+      <button type="button" class="btn" data-icon="text" data-set-tool="text">Note</button>
+      <button type="button" class="btn" data-icon="zone" data-set-tool="zone">Slab zone</button>
     </div>
     <div class="msec mfile">
       <div class="mlabel">File and project</div>
@@ -87,20 +98,20 @@
 <main id="main">
   <nav id="tools" role="toolbar" aria-label="Tools">
     <button data-tool="select" data-icon="select" data-key="V" class="tool active" title="Select / edit (V)">Select</button>
-    <button id="slvCountTool" class="tool" data-icon="count" title="Sleeve count">Sleeves</button>
+    <button id="slvCountTool" class="tool" data-icon="count" title="Placed sleeve count (and detected snap targets on this page)">Count</button>
     <button data-tool="pan" data-icon="hand" data-key="H" class="tool" title="Pan (H)">Pan</button>
     <span class="sep"></span>
     <button data-tool="calibrate" data-icon="cal" data-key="K" class="tool" title="Calibrate scale with 2 points (K)">Calibrate</button>
     <span class="sep"></span>
     <button data-tool="line" data-icon="line" data-key="L" class="tool" title="Length (L)">Length</button>
-    <button data-tool="poly" data-icon="poly" data-key="P" class="tool" title="Pipe run / polyline (P)">Pipe run</button>
-    <button data-tool="area" data-icon="area" data-key="A" class="tool" title="Area (A)">Area</button>
-    <span class="sep"></span>
-    <button data-tool="count" data-icon="count" data-key="C" class="tool" title="Count fixtures (C)">Count</button>
-    <button data-tool="sleeve" data-icon="sleeve" data-key="E" class="tool" title="Sleeve (E)">Sleeve</button>
-    <button data-tool="origin" data-icon="origin" data-key="O" class="tool" title="Set 0,0 origin (O)">Origin</button>
-    <span class="sep"></span>
-    <button data-tool="text" data-icon="text" data-key="T" class="tool" title="Text note (T)">Note</button>
+    <button data-tool="poly" data-icon="poly" data-key="P" class="tool site-extra" title="Pipe run / polyline (P)">Pipe run</button>
+    <button data-tool="area" data-icon="area" data-key="A" class="tool site-extra" title="Area (A)">Area</button>
+    <span class="sep site-extra"></span>
+    <button data-tool="count" data-icon="count" data-key="C" class="tool site-extra" title="Count fixtures (C)">Tally</button>
+    <button data-tool="sleeve" data-icon="sleeve" data-key="E" class="tool site-extra" title="Sleeve (E)">Sleeve</button>
+    <button data-tool="origin" data-icon="origin" data-key="O" class="tool site-extra" title="Set 0,0 origin (O)">Origin</button>
+    <span class="sep site-extra"></span>
+    <button data-tool="text" data-icon="text" data-key="T" class="tool site-extra" title="Text note (T)">Note</button>
   </nav>
 
   <div id="work">
