@@ -352,6 +352,15 @@ function renderBase(key) {
       if (!canvasLooksPainted(base)) { console.warn('renderBase blank buffer', cw, 'x', ch); r *= 0.55; continue; }
       base._ok = true; placeCanvas();
       if (baseJob === job) baseJob = null;
+      // Keep a copy so flipping back to this page is instant
+      try {
+        if (doc && doc.type === 'pdf') {
+          const c = document.createElement('canvas');
+          c.width = base.width; c.height = base.height;
+          c.getContext('2d').drawImage(base, 0, 0);
+          pageBaseCache[page] = { key, r: base._r, w: base.width, h: base.height, canvas: c };
+        }
+      } catch (e) { }
       schedulePrefetchNeighbors();
       return true;
     }
@@ -1637,26 +1646,28 @@ async function ensureSleeveSnap(pg, onProg) {
   try {
     if (openBusy) return geomCache[pg] || { ready: false };
     const G = await buildGeom(pg); if (!G || !G.ready || openBusy) return G || { ready: false };
-    if (G.sleeve && G.sleeve.gen === contentGen && G.sleeve.page === pg && G.sleeve.n >= 0) return G;
+    // Only skip when a prior FULL scan finished (interim viewport publishes set complete=false)
+    if (G.sleeve && G.sleeve.gen === contentGen && G.sleeve.page === pg && G.sleeve.complete) return G;
     const basePts = [], baseKinds = [];
     if (proj) for (const it of proj.items) if (it.type === 'sleeve' && it.page === pg && it.pts && it.pts[0]) { basePts.push(it.pts[0]); baseKinds.push('markup'); }
-    const publish = (extra, ekinds) => {
+    const publish = (extra, ekinds, final) => {
       const pts = basePts.slice(), kinds = baseKinds.slice();
       if (extra) for (let i = 0; i < extra.length; i++) { pts.push(extra[i]); kinds.push(ekinds ? ekinds[i] : 'anchor'); }
       pts._kinds = kinds;
       buildSleeveIndex(G, pts);
+      G.sleeve.complete = !!final;
       if (onProg) onProg(G._sleevePct || 0, G.sleeve.n);
       return G;
     };
     if (doc.type === 'cad') {
       const c = collectCadSleevePts();
-      publish(c, c.map(() => 'cad'));
+      publish(c, c.map(() => 'cad'), true);
       if (onProg) onProg(100, G.sleeve.n);
       return G;
     }
     if (doc.type === 'image') {
       const c = scanOrangeFromPix(G);
-      publish(c, c.map(() => 'raster'));
+      publish(c, c.map(() => 'raster'), true);
       if (onProg) onProg(100, G.sleeve.n);
       return G;
     }
@@ -1664,16 +1675,16 @@ async function ensureSleeveSnap(pg, onProg) {
       // Viewport-first: publish base-raster hits immediately, then refine with vector walk + %.
       const c = await scanOrangeFromPdf(pg, (pct, interim) => {
         G._sleevePct = pct;
-        if (interim && interim.length) publish(interim, interim._kinds);
+        if (interim && interim.length) publish(interim, interim._kinds, false);
         else if (onProg) onProg(pct, G.sleeve ? G.sleeve.n : 0);
       });
       if (openBusy) return G;
       const ck = c._kinds || null;
-      publish(c, ck || c.map(() => 'anchor'));
+      publish(c, ck || c.map(() => 'anchor'), true);
       if (onProg) onProg(100, G.sleeve.n);
       return G;
     }
-    publish(null, null);
+    publish(null, null, true);
     return G;
   } catch (e) { console.warn('ensureSleeveSnap', e); return geomCache[pg] || { ready: false }; }
 }
@@ -1939,7 +1950,13 @@ function warmGeomNow(gen) {
     const p = Math.max(0, Math.min(99, pct | 0));
     setSleeveStatus(n ? ('Finding sleeves… ' + p + '% · ' + sleeveFoundLabel(n)) : ('Finding sleeves… ' + p + '%'));
   };
-  const go = () => ensureSleeveSnap(pg, onProg).then(G => { if (gen !== warmGen || doc !== d) return; done(G); draw(); syncToWallUi(); }).catch(e => { console.warn('sleeve snap', e); done(null); });
+  const go = () => ensureSleeveSnap(pg, onProg).then(G => {
+    if (gen !== warmGen || doc !== d) return;
+    const latest = geomCache[pg] || G;
+    if (latest && latest.sleeve && latest.sleeve.n) setSleeveStatus(sleeveFoundLabel(latest.sleeve.n));
+    else done(latest);
+    draw(); syncToWallUi();
+  }).catch(e => { console.warn('sleeve snap', e); done(null); });
   const start = () => { if (gen !== warmGen || doc !== d || openBusy) { done(null); return; } if (!geomCache[pg]) buildGeom(pg).then(go).catch(e => { console.warn('buildGeom', e); done(null); }); else go(); };
   // One more idle slice so first interaction after open stays smooth
   if (typeof requestIdleCallback === 'function') requestIdleCallback(() => start(), { timeout: 2000 });
