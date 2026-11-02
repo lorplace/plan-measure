@@ -1767,10 +1767,10 @@ function nearestPerpWall(from, toward, searchR) {
 }
 let wallExt = null; // { a:[x,y], b:[x,y] } fictional wall continuation while aiming / on item
 function geomSnapRadius(touchR) {
-  // Sensible at all zooms: ~24–28 CSS px, hard-capped in page space so a far endpoint
-  // cannot steal a tap meant for a nearby dimension line / tick.
-  const rCss = touchR ? 26 : 14;
-  const cap = touchR ? 12 : 9;
+  // Sensible at all zooms: ~22–26 CSS px, hard-capped in page space so dense CAD
+  // nearby ticks/ends do not steal a tap meant for the nearest dimension mark.
+  const rCss = touchR ? 24 : 12;
+  const cap = touchR ? 8 : 6;
   return Math.min(rCss / zoom, cap);
 }
 function findSnap(p, r, exclude, opts) {
@@ -1780,12 +1780,13 @@ function findSnap(p, r, exclude, opts) {
   // pri: lower is better (legacy). bias adds to distance for scoring.
   const biasOf = (kind, pri) => {
     if (kind === 'perp' || kind === 'perp-ext') return -0.5;
-    // Tick ends + strong (ortho/tick) intersections share the top tier — closest wins.
-    if (kind === 'x') return pri < 0 ? 0 : 2.5; // oblique crossings demoted
-    if (kind === 'end' && pri < 0) return 0; // short tick end
-    if (kind === 'end' || kind === 'mid' || kind === 'center') return 2.0;
-    if (kind === 'line') return 3.5;
-    return 2.2;
+    // Tick ends slightly preferred; strong intersections share the top band.
+    // Closest among the top band wins (distance-first within tier).
+    if (kind === 'x') return pri < 0 ? 0.15 : 2.8; // oblique demoted
+    if (kind === 'end' && pri < 0) return -0.35; // short tick end slight magnet
+    if (kind === 'end' || kind === 'mid' || kind === 'center') return 2.2;
+    if (kind === 'line') return 3.6;
+    return 2.4;
   };
   const consider = (q, kind, pri) => {
     if (!q || !isFinite(q[0]) || !isFinite(q[1])) return;
