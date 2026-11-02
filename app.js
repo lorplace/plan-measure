@@ -1146,82 +1146,92 @@ async function buildGeom(pg) {
 async function fillWallsFromOps(G, d, pg, ops, gen) {
   // Chunked operator walk → segment grid + merged wall index. Safe on phone: yields often,
   // caps segment count, skips hairline noise. gen=0 means synchronous caller owns G.ready.
+  // Two passes on heavy sheets: (1) short dimension ticks anywhere in the ops stream get
+  // reserved slots first, (2) longer strokes fill the rest — so late-drawn ticks are kept
+  // and walls still index for Length / perp.
   if (!ops || !ops.fnArray || !ops.fnArray.length) {
     installWallIndex(G, [], pg); G.wallsReady = true; return G;
   }
   const vp = d.vps[pg], OPS = pdfjsLib.OPS, U = pdfjsLib.Util;
   const heavy = isPhoneDev && ops.fnArray.length > 350000;
-  // Keep short dimension ticks in the snap grid (min ~0.05). Wall merge filters longer runs later.
-  // On heavy sheets, RESERVE a tick bank so late-drawn dimension marks are not dropped by MAXS.
   const MAXS = heavy ? 140000 : 200000;
   const minLen = 0.05;
   const wallMin = heavy ? Math.max(2.0, 0.003 * Math.min(doc.sizes[pg].w, doc.sizes[pg].h)) : 0;
   const tickMaxKeep = Math.max(8, 0.012 * Math.min(doc.sizes[pg].w, doc.sizes[pg].h));
-  const TICK_CAP = heavy ? Math.floor(MAXS * 0.4) : MAXS; // up to 40% reserved for short ticks
-  const LONG_CAP = MAXS - Math.min(TICK_CAP, Math.floor(MAXS * 0.25));
-  let tickSx = new Float64Array(4 * 2048), nTick = 0;
-  let longSx = new Float64Array(4 * 4096), nLong = 0;
-  let ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm); const stack = [];
-  const setCtm = m => { ctm = m; M = U.transform(vp.transform, m); };
-  const pushBuf = (bufName, x1, y1, x2, y2) => {
-    if (bufName === 'tick') {
-      if (nTick >= TICK_CAP) return;
-      if (4 * nTick + 4 > tickSx.length) {
-        const b = new Float64Array(Math.min(4 * TICK_CAP, tickSx.length * 2)); b.set(tickSx); tickSx = b;
+  const TICK_RESERVE = heavy ? Math.floor(MAXS * 0.35) : 0;
+
+  async function walk(filter, cap, into) {
+    let sx = into || new Float64Array(4 * 4096), n = into ? into._n || 0 : 0;
+    let ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm); const stack = [];
+    const setCtm = m => { ctm = m; M = U.transform(vp.transform, m); };
+    const add = (x1, y1, x2, y2) => {
+      if (n >= cap) return;
+      const L = Math.hypot(x2 - x1, y2 - y1);
+      if (L <= minLen) return;
+      if (filter === 'tick' && L > tickMaxKeep) return;
+      if (filter === 'long' && L <= tickMaxKeep) return;
+      /* filter === 'all' → keep */
+      if (4 * n + 4 > sx.length) {
+        const b = new Float64Array(Math.min(4 * Math.max(cap, n + 1), Math.max(sx.length * 2, 4 * (n + 1))));
+        b.set(sx.subarray(0, 4 * n)); sx = b;
       }
-      const o = 4 * nTick++; tickSx[o] = x1; tickSx[o + 1] = y1; tickSx[o + 2] = x2; tickSx[o + 3] = y2;
-    } else {
-      if (nLong >= LONG_CAP) return;
-      if (4 * nLong + 4 > longSx.length) {
-        const b = new Float64Array(Math.min(4 * LONG_CAP, longSx.length * 2)); b.set(longSx); longSx = b;
+      const o = 4 * n++; sx[o] = x1; sx[o + 1] = y1; sx[o + 2] = x2; sx[o + 3] = y2;
+    };
+    const GEOM_CHUNK = isPhoneDev ? (heavy ? 4000 : 8000) : 80000;
+    for (let i = 0; i < ops.fnArray.length && n < cap; i++) {
+      if (i && (i % GEOM_CHUNK) === 0) {
+        if (doc !== d || openBusy) { if (geomCache[pg] === G && !gen) delete geomCache[pg]; return null; }
+        if (gen && G._wallGen !== gen) return null;
+        await new Promise(r => setTimeout(r, 0));
       }
-      const o = 4 * nLong++; longSx[o] = x1; longSx[o + 1] = y1; longSx[o + 2] = x2; longSx[o + 3] = y2;
+      const fn = ops.fnArray[i], args = ops.argsArray[i];
+      if (fn === OPS.save) stack.push(ctm); else if (fn === OPS.restore) { if (stack.length) setCtm(stack.pop()); }
+      else if (fn === OPS.transform) setCtm(U.transform(ctm, args));
+      else if (fn === OPS.paintFormXObjectBegin) { stack.push(ctm); if (args[0]) setCtm(U.transform(ctm, args[0])); }
+      else if (fn === OPS.paintFormXObjectEnd) { if (stack.length) setCtm(stack.pop()); }
+      else if (fn === OPS.constructPath) { const sub = args[0], co = args[1], [a, b, c, d0, e, f] = M; let j = 0, cur = false, cx = 0, cy = 0, st = false, s0x = 0, s0y = 0;
+        for (const op of sub) {
+          if (op === OPS.moveTo) { const x = co[j], y = co[j + 1]; j += 2; cx = s0x = a * x + c * y + e; cy = s0y = b * x + d0 * y + f; cur = st = true; }
+          else if (op === OPS.lineTo || op === OPS.curveTo || op === OPS.curveTo2 || op === OPS.curveTo3) {
+            const k = op === OPS.lineTo ? 0 : op === OPS.curveTo ? 4 : 2, x = co[j + k], y = co[j + k + 1]; j += k + 2;
+            const nx = a * x + c * y + e, ny = b * x + d0 * y + f; if (cur) add(cx, cy, nx, ny); cx = nx; cy = ny; cur = true; }
+          else if (op === OPS.rectangle) { const x = co[j], y = co[j + 1], w = co[j + 2], h = co[j + 3]; j += 4;
+            const X = (u, v) => a * u + c * v + e, Y = (u, v) => b * u + d0 * v + f, x1 = X(x, y), y1 = Y(x, y), x2 = X(x + w, y), y2 = Y(x + w, y), x3 = X(x + w, y + h), y3 = Y(x + w, y + h), x4 = X(x, y + h), y4 = Y(x, y + h);
+            add(x1, y1, x2, y2); add(x2, y2, x3, y3); add(x3, y3, x4, y4); add(x4, y4, x1, y1); cx = s0x = x1; cy = s0y = y1; cur = st = true; }
+          else if (op === OPS.closePath) { if (cur && st) add(cx, cy, s0x, s0y); cur = st; cx = s0x; cy = s0y; }
+        } } }
+    sx._n = n;
+    return sx;
+  }
+
+  let sx, n;
+  if (TICK_RESERVE > 0) {
+    const tickSx = await walk('tick', TICK_RESERVE, null);
+    if (!tickSx) return G;
+    const nTick = tickSx._n;
+    const longCap = MAXS - nTick;
+    // Seed long buffer with ticks already collected, then append longs
+    const seeded = new Float64Array(4 * Math.max(4096, nTick));
+    seeded.set(tickSx.subarray(0, 4 * nTick));
+    seeded._n = nTick;
+    const all = await walk('long', MAXS, seeded);
+    if (!all) return G;
+    // Also allow leftover tick slots to take more ticks if longs didn't fill MAXS
+    if (all._n < MAXS && nTick < TICK_RESERVE) {
+      /* already have all ticks from pass 1 */
     }
-  };
-  const add = (x1, y1, x2, y2) => {
-    const L = Math.hypot(x2 - x1, y2 - y1);
-    if (L <= minLen) return;
-    if (L <= tickMaxKeep) pushBuf('tick', x1, y1, x2, y2);
-    else pushBuf('long', x1, y1, x2, y2);
-  };
-  const GEOM_CHUNK = isPhoneDev ? (heavy ? 4000 : 8000) : 80000;
-  for (let i = 0; i < ops.fnArray.length; i++) {
-    if (nTick >= TICK_CAP && nLong >= LONG_CAP) break;
-    if (i && (i % GEOM_CHUNK) === 0) {
-      if (doc !== d || openBusy) { if (geomCache[pg] === G && !gen) delete geomCache[pg]; return G; }
-      if (gen && G._wallGen !== gen) return G;
-      await new Promise(r => setTimeout(r, 0));
-    }
-    const fn = ops.fnArray[i], args = ops.argsArray[i];
-    if (fn === OPS.save) stack.push(ctm); else if (fn === OPS.restore) { if (stack.length) setCtm(stack.pop()); }
-    else if (fn === OPS.transform) setCtm(U.transform(ctm, args));
-    else if (fn === OPS.paintFormXObjectBegin) { stack.push(ctm); if (args[0]) setCtm(U.transform(ctm, args[0])); }
-    else if (fn === OPS.paintFormXObjectEnd) { if (stack.length) setCtm(stack.pop()); }
-    else if (fn === OPS.constructPath) { const sub = args[0], co = args[1], [a, b, c, d0, e, f] = M; let j = 0, cur = false, cx = 0, cy = 0, st = false, s0x = 0, s0y = 0;
-      for (const op of sub) {
-        if (op === OPS.moveTo) { const x = co[j], y = co[j + 1]; j += 2; cx = s0x = a * x + c * y + e; cy = s0y = b * x + d0 * y + f; cur = st = true; }
-        else if (op === OPS.lineTo || op === OPS.curveTo || op === OPS.curveTo2 || op === OPS.curveTo3) {
-          const k = op === OPS.lineTo ? 0 : op === OPS.curveTo ? 4 : 2, x = co[j + k], y = co[j + k + 1]; j += k + 2;
-          const nx = a * x + c * y + e, ny = b * x + d0 * y + f; if (cur) add(cx, cy, nx, ny); cx = nx; cy = ny; cur = true; }
-        else if (op === OPS.rectangle) { const x = co[j], y = co[j + 1], w = co[j + 2], h = co[j + 3]; j += 4;
-          const X = (u, v) => a * u + c * v + e, Y = (u, v) => b * u + d0 * v + f, x1 = X(x, y), y1 = Y(x, y), x2 = X(x + w, y), y2 = Y(x + w, y), x3 = X(x + w, y + h), y3 = Y(x + w, y + h), x4 = X(x, y + h), y4 = Y(x, y + h);
-          add(x1, y1, x2, y2); add(x2, y2, x3, y3); add(x3, y3, x4, y4); add(x4, y4, x1, y1); cx = s0x = x1; cy = s0y = y1; cur = st = true; }
-        else if (op === OPS.closePath) { if (cur && st) add(cx, cy, s0x, s0y); cur = st; cx = s0x; cy = s0y; }
-      } } }
+    n = all._n;
+    sx = all.slice(0, 4 * n);
+  } else {
+    const all = await walk('all', MAXS, null);
+    if (!all) return G;
+    // filter none — 'all' means no tick/long filter
+    n = all._n;
+    sx = all.slice(0, 4 * n);
+  }
+
   if (gen && G._wallGen !== gen) return G;
   if (doc !== d) return G;
-  // Merge tick bank first (calibrate/dimension locks), then longer strokes, up to MAXS
-  const n = Math.min(MAXS, nTick + nLong);
-  const sx = new Float64Array(4 * n);
-  let w = 0;
-  for (let i = 0; i < nTick && w < n; i++, w++) {
-    const o = 4 * i, d0 = 4 * w;
-    sx[d0] = tickSx[o]; sx[d0 + 1] = tickSx[o + 1]; sx[d0 + 2] = tickSx[o + 2]; sx[d0 + 3] = tickSx[o + 3];
-  }
-  for (let i = 0; i < nLong && w < n; i++, w++) {
-    const o = 4 * i, d0 = 4 * w;
-    sx[d0] = longSx[o]; sx[d0 + 1] = longSx[o + 1]; sx[d0 + 2] = longSx[o + 2]; sx[d0 + 3] = longSx[o + 3];
-  }
   G.px = sx;
   G.segs = new Proxy({ length: n }, { get: (o, k) => k === 'length' ? n : (typeof k === 'string' && /^\d+$/.test(k)) ? [sx[4 * k], sx[4 * k + 1], sx[4 * k + 2], sx[4 * k + 3]] : undefined });
   G.grid = new Map();
@@ -1236,6 +1246,7 @@ async function fillWallsFromOps(G, d, pg, ops, gen) {
   G.wallsReady = true;
   return G;
 }
+
 function cachedOps(page) { try { for (const st of page._intentStates.values()) { const o = st.operatorList; if (o && o.lastChunk && o.fnArray.length) return o; } } catch (e) { } return null; }
 function nearSegs(G, p, r) { const out = new Set(); const c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
   for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) { const c = G.grid.get(cx + ',' + cy); if (c) c.forEach(i => out.add(i)); } return [...out]; }
