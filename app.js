@@ -974,10 +974,16 @@ function loupeOverlay(ctx, p, S, L) {
   if (draft && draft.pts.length) { ctx.strokeStyle = draft.color; ctx.lineWidth = 1.5 * dpr; ctx.beginPath(); draft.pts.forEach((q, i) => { const [x, y] = T(q); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); if (!(draft.type === 'calibrate' && draft.pts.length === 2) && hover) { const [x, y] = T(hover); ctx.lineTo(x, y); } ctx.stroke();
     draft.pts.forEach((q, i) => { const [x, y] = T(q); ctx.beginPath(); ctx.arc(x, y, (i === calSel ? 5 : 3) * dpr, 0, 7); ctx.strokeStyle = i === calSel ? '#ffb300' : draft.color; ctx.stroke(); }); }
   if (guide) { ctx.save(); ctx.setLineDash([5 * dpr, 4 * dpr]); ctx.strokeStyle = '#2962ff'; ctx.lineWidth = 1.2 * dpr; for (const [a, b] of guideLines(guide, L / S)) { const A = T(a), B = T(b); ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke(); } ctx.restore(); }
-  if (snapHit) { const [sx, sy] = T(snapHit.p); drawSnapMark(ctx, sx, sy, snapHit.kind, 7 * dpr, 2 * dpr); }
+  if (snapHit) {
+    const [sx, sy] = T(snapHit.p);
+    // Clear green lock ring so the magnifier shows the point is locked to vector geometry
+    ctx.save(); ctx.strokeStyle = '#00c853'; ctx.lineWidth = 2.5 * dpr; ctx.beginPath();
+    ctx.arc(sx, sy, 11 * dpr, 0, 7); ctx.stroke(); ctx.restore();
+    drawSnapMark(ctx, sx, sy, snapHit.kind, 7 * dpr, 2 * dpr);
+  }
   ctx.strokeStyle = '#e53935'; ctx.lineWidth = 1 * dpr; const c = L / 2, g = 6 * dpr; ctx.beginPath();
   ctx.moveTo(0, c); ctx.lineTo(c - g, c); ctx.moveTo(c + g, c); ctx.lineTo(L, c); ctx.moveTo(c, 0); ctx.lineTo(c, c - g); ctx.moveTo(c, c + g); ctx.lineTo(c, L); ctx.stroke();
-  ctx.fillStyle = '#e53935'; ctx.fillRect(c - dpr / 2, c - dpr / 2, dpr, dpr);
+  ctx.fillStyle = snapHit ? '#00c853' : '#e53935'; ctx.fillRect(c - dpr / 2, c - dpr / 2, dpr, dpr);
   ctx.fillStyle = '#263238cc'; ctx.fillRect(L / 2 - 16 * dpr, L - 18 * dpr, 32 * dpr, 14 * dpr); ctx.fillStyle = '#fff'; ctx.font = `${10 * dpr}px sans-serif`; ctx.textAlign = 'center'; ctx.fillText($('#loupeMag').value + 'x', L / 2, L - 7 * dpr);
 }
 function nudge(dx, dy) { if (!draft || !draft.pts.length) return; const i = Math.min(calSel, draft.pts.length - 1), q = draft.pts[i]; draft.pts[i] = [q[0] + dx / zoom, q[1] + dy / zoom]; draw();
@@ -1123,23 +1129,13 @@ async function buildGeom(pg) {
   if (doc !== d) { if (geomCache[pg] === G) delete geomCache[pg]; return G; }
   if (openBusy) { if (geomCache[pg] === G) delete geomCache[pg]; return G; } // open still in progress: retry later
   G._pg = pg;
-  // Heavy phone PDFs: mark ready immediately so sleeves can index, then fill walls in
-  // idle chunks from the already-cached operator list (never leave wallN=0 forever).
-  const heavyPhone = isPhoneDev && ops && ops.fnArray.length > 350000;
-  if (heavyPhone) {
-    installWallIndex(G, [], pg);
-    G.wallsReady = false;
-    G.ready = true;
-    G._wallGen = (G._wallGen || 0) + 1;
-    const gen = G._wallGen;
-    fillWallsFromOps(G, d, pg, ops, gen).then(() => {
-      if (geomCache[pg] !== G || G._wallGen !== gen) return;
-      syncToWallUi();
-    }).catch(e => console.warn('fillWallsFromOps', e));
-    return G;
-  }
+  // Always walk ops in idle chunks (incl. heavy phone). Calibrate/Length need short
+  // dimension ticks in G.segs — never leave segs=[] forever. Yields keep UI alive.
+  G.wallsReady = false;
   await fillWallsFromOps(G, d, pg, ops, 0);
-  G.ready = true; return G;
+  G.ready = true;
+  try { syncToWallUi(); } catch (e) { }
+  return G;
 }
 async function fillWallsFromOps(G, d, pg, ops, gen) {
   // Chunked operator walk → segment grid + merged wall index. Safe on phone: yields often,
@@ -1149,9 +1145,10 @@ async function fillWallsFromOps(G, d, pg, ops, gen) {
   }
   const vp = d.vps[pg], OPS = pdfjsLib.OPS, U = pdfjsLib.Util;
   const heavy = isPhoneDev && ops.fnArray.length > 350000;
-  // Phone heavy: fewer segs, longer min length (walls only). Desktop: full snap grid.
+  // Keep short dimension ticks in the snap grid (min ~0.05). Wall merge filters longer runs later.
   const MAXS = heavy ? 120000 : 200000;
-  const minLen = heavy ? Math.max(2.5, 0.004 * Math.min(doc.sizes[pg].w, doc.sizes[pg].h)) : 0.05;
+  const minLen = 0.05;
+  const wallMin = heavy ? Math.max(2.0, 0.003 * Math.min(doc.sizes[pg].w, doc.sizes[pg].h)) : 0;
   let sx = new Float64Array(4 * 4096), n = 0, ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm); const stack = [];
   const setCtm = m => { ctm = m; M = U.transform(vp.transform, m); };
   const add = (x1, y1, x2, y2) => {
@@ -1190,7 +1187,12 @@ async function fillWallsFromOps(G, d, pg, ops, gen) {
   G.segs = new Proxy({ length: n }, { get: (o, k) => k === 'length' ? n : (typeof k === 'string' && /^\d+$/.test(k)) ? [sx[4 * k], sx[4 * k + 1], sx[4 * k + 2], sx[4 * k + 3]] : undefined });
   G.grid = new Map();
   for (let i = 0; i < n; i++) gridAdd(G.grid, i, sx[4 * i], sx[4 * i + 1], sx[4 * i + 2], sx[4 * i + 3]);
-  const raw = []; for (let i = 0; i < n; i++) raw.push([sx[4 * i], sx[4 * i + 1], sx[4 * i + 2], sx[4 * i + 3]]);
+  const raw = [];
+  for (let i = 0; i < n; i++) {
+    const x1 = sx[4 * i], y1 = sx[4 * i + 1], x2 = sx[4 * i + 2], y2 = sx[4 * i + 3];
+    if (wallMin && Math.hypot(x2 - x1, y2 - y1) < wallMin) continue;
+    raw.push([x1, y1, x2, y2]);
+  }
   installWallIndex(G, raw, pg);
   G.wallsReady = true;
   return G;
@@ -1764,18 +1766,28 @@ function nearestPerpWall(from, toward, searchR) {
   return best || bestAny;
 }
 let wallExt = null; // { a:[x,y], b:[x,y] } fictional wall continuation while aiming / on item
+function geomSnapRadius(touchR) {
+  // Sensible at all zooms: ~24–28 CSS px, hard-capped in page space so a far endpoint
+  // cannot steal a tap meant for a nearby dimension line / tick.
+  const rCss = touchR ? 28 : 14;
+  const cap = touchR ? 16 : 10;
+  return Math.min(rCss / zoom, cap);
+}
 function findSnap(p, r, exclude, opts) {
-  const G = geomCache[page]; let best = null; const consider = (q, kind, pri) => { const d = dist(p, q); if (d <= r && (!best || pri < best.pri || (pri === best.pri && d < best.d))) best = { p: q, kind, pri, d }; };
+  const G = geomCache[page]; let best = null;
+  const consider = (q, kind, pri) => {
+    if (!q || !isFinite(q[0]) || !isFinite(q[1])) return;
+    const d = dist(p, q);
+    if (d <= r && (!best || pri < best.pri || (pri === best.pri && d < best.d))) best = { p: q, kind, pri, d };
+  };
   opts = opts || {};
-  // 1) Sleeve / anchor centres — STRICT priority: if any are in range, they win over
-  // every line endpoint / arrowhead / markup, even when those are closer to the aim point.
+  const noSleeve = !!(opts.noSleeve || opts.mode === 'calibrate');
+  // 1) Sleeve / anchor centres — STRICT priority for Length/place, NEVER in Calibrate.
   // Use opts.sleeveR (capped page-space) when provided so fit-zoom empty taps do not snap.
-  if (G && G.sleeve) {
+  if (!noSleeve && G && G.sleeve) {
     const sr = opts.sleeveR != null ? opts.sleeveR : r;
     const near = nearSleevePts(G, p, sr);
     if (near.length) {
-      // Closest sleeve/anchor centre wins. Only average sub-pixel duplicates of the
-      // SAME symbol (tol ~2.5 CSS units) — never blend neighbouring distinct anchors.
       let bq = near[0], bd = dist(p, near[0]);
       for (let i = 1; i < near.length; i++) { const d = dist(p, near[i]); if (d < bd) { bd = d; bq = near[i]; } }
       const mergeTol = 2.5; let sx = 0, sy = 0, n = 0;
@@ -1784,27 +1796,65 @@ function findSnap(p, r, exclude, opts) {
       return { p: centre, kind: 'sleeve', pri: -1, d: dist(p, centre) };
     }
   }
-  // 2) Perpendicular foot when measuring from a sleeve centre — always lock (never free in empty space)
+  // 2) Perpendicular foot when measuring from a sleeve centre — always lock
   if (opts.perpFrom) {
     const hit = nearestPerpWall(opts.perpFrom, p, Math.max(r * 20, Math.max(doc.sizes[page].w, doc.sizes[page].h)));
     if (hit) {
-      consider(hit.foot, hit.onSeg ? 'perp' : 'perp-ext', -2);
+      consider(hit.foot, hit.onSeg ? 'perp' : 'perp-ext', -3);
       if (best && (best.kind === 'perp' || best.kind === 'perp-ext')) wallExt = hit.ext ? { a: hit.ext[0], b: hit.ext[1] } : null;
     }
   }
-  // 3) Markup points
-  for (const it of proj.items) if (it.page === page) for (const q of it.pts) if (q !== exclude) consider(q, 'end', 0);
-  if (draft) for (const q of draft.pts) if (q !== exclude) consider(q, 'end', 0);
-  // 4) Plan geometry: ends / mids / centres / intersections, then lines.
-  // Ends/x share pri 0 with markup so the closest target wins; sleeves (pri -1) still beat both.
-  if (G && G.ready && G.segs.length) { const ids = nearSegs(G, p, r).slice(0, 400), S = ids.map(i => G.segs[i]);
-    for (const s of S) if (!s[4]) { consider([s[0], s[1]], 'end', 0); consider([s[2], s[3]], 'end', 0); }
-    if (G.pgrid) { const c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
-      for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) for (const i of (G.pgrid.get(cx + ',' + cy) || [])) { const q = G.pts.get ? G.pts.get(i) : G.pts[i]; consider([q[0], q[1]], q[2], 0); } }
-    { const near = S.filter(s => dist(projSeg(p, s), p) <= r).slice(0, 80);
-      for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) { const x = segX(near[i], near[j]); if (x) consider(x, 'x', 0); }
-      if (!best || best.pri > 0) for (const s of near) consider(projSeg(p, s), 'line', 2); } }
-  if (!best && G && G.pix) { // image: nearest dark pixel, refined to centre of the dark stroke
+  // 3) Markup points (lower than vector geometry in calibrate; same band as ends otherwise)
+  const markupPri = opts.mode === 'calibrate' ? 2 : 1;
+  for (const it of proj.items) if (it.page === page) for (const q of it.pts) if (q !== exclude) consider(q, 'end', markupPri);
+  if (draft) for (const q of draft.pts) if (q !== exclude) consider(q, 'end', markupPri);
+  // 4) Plan geometry priority (Calibrate + Length when no sleeve):
+  //    intersections / tick T-junctions > short tick ends > line ends > on-line projection
+  if (G && G.ready && G.segs && G.segs.length) {
+    const ids = nearSegs(G, p, r).slice(0, 500), S = ids.map(i => G.segs[i]).filter(s => s && !s[4]);
+    const tickMax = Math.max(8, 0.012 * Math.min(doc.sizes[page].w, doc.sizes[page].h));
+    const nearLines = [];
+    for (const s of S) {
+      const foot = projSeg(p, s);
+      if (dist(foot, p) <= r) nearLines.push(s);
+    }
+    const near = nearLines.slice(0, 100);
+    // 4a) True intersections of nearby segments
+    for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) {
+      const x = segX(near[i], near[j]); if (x) consider(x, 'x', -2);
+    }
+    // 4b) T-junctions: short tick end lying on (or very near) a longer line → treat as intersection
+    const tTol = Math.max(0.35, r * 0.08);
+    for (const s of near) {
+      const len = Math.hypot(s[2] - s[0], s[3] - s[1]);
+      if (len > tickMax || len < 0.2) continue;
+      for (const end of [[s[0], s[1]], [s[2], s[3]]]) {
+        for (const L of near) {
+          if (L === s) continue;
+          const Llen = Math.hypot(L[2] - L[0], L[3] - L[1]);
+          if (Llen < len * 1.2) continue;
+          const foot = projSeg(end, L);
+          if (dist(end, foot) <= tTol) consider(foot, 'x', -2);
+        }
+      }
+    }
+    // 4c) Endpoints — short tick ends beat long-line ends
+    for (const s of S) {
+      const len = Math.hypot(s[2] - s[0], s[3] - s[1]);
+      const pri = len <= tickMax ? -1 : 0;
+      consider([s[0], s[1]], 'end', pri);
+      consider([s[2], s[3]], 'end', pri);
+    }
+    if (G.pgrid) {
+      const c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
+      for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) for (const i of (G.pgrid.get(cx + ',' + cy) || [])) {
+        const q = G.pts.get ? G.pts.get(i) : G.pts[i]; consider([q[0], q[1]], q[2], 0);
+      }
+    }
+    // 4d) On-line perpendicular projection — always available so a near miss locks onto the stroke
+    for (const s of near) consider(projSeg(p, s), 'line', 1);
+  }
+  if (!best && G && G.pix) {
     const { width: W, height: Hh, data } = G.pix, R = Math.ceil(r), x0 = Math.round(p[0]), y0 = Math.round(p[1]); let bd = 1e9, bq = null;
     const dark = (x, y) => x >= 0 && y >= 0 && x < W && y < Hh && (data[(y * W + x) * 4] * .3 + data[(y * W + x) * 4 + 1] * .59 + data[(y * W + x) * 4 + 2] * .11) < 110;
     for (let y = y0 - R; y <= y0 + R; y++) for (let x = x0 - R; x <= x0 + R; x++) if (dark(x, y)) { const d = (x - p[0]) ** 2 + (y - p[1]) ** 2; if (d < bd) { bd = d; bq = [x, y]; } }
@@ -1812,7 +1862,9 @@ function findSnap(p, r, exclude, opts) {
       const run = (dx, dy) => { let a = 0, b = 0; while (a < 12 && dark(bq[0] - dx * (a + 1), bq[1] - dy * (a + 1))) a++; while (b < 12 && dark(bq[0] + dx * (b + 1), bq[1] + dy * (b + 1))) b++; return [a, b]; };
       const [ha, hb] = run(1, 0), [va, vb] = run(0, 1); let q;
       if (ha + hb <= va + vb) q = [bq[0] + (hb - ha) / 2 + 0.5, p[1]]; else q = [p[0], bq[1] + (vb - va) / 2 + 0.5];
-      consider(q, 'line', 2); } }
+      consider(q, 'line', 1);
+    }
+  }
   return best;
 }
 function sleeveSnapRadius(touchR) {
@@ -1832,12 +1884,13 @@ function aim(p, e, prev, exclude) {
   if (st) q = st.q;
   if (snapOn && !e.altKey && doc && proj) {
     if (!geomCache[page]) buildGeom(page);
-    // Line/end snap stays generous; sleeves use a capped page-space radius (see sleeveSnapRadius)
-    const r = (touchR ? 30 : 14) / zoom;
+    // Geometry snap: capped page-space radius. Sleeves: separate cap (skipped in Calibrate).
+    const r = geomSnapRadius(touchR);
     const sleeveR = sleeveSnapRadius(touchR);
-    const fromSleeve = !!(prev && tool === 'line' && isSleeveCentrePt(prev, Math.max(4 / zoom, 1)));
+    const cal = tool === 'calibrate';
+    const fromSleeve = !cal && !!(prev && tool === 'line' && isSleeveCentrePt(prev, Math.max(4 / zoom, 1)));
     if (fromSleeve) {
-      // Hard lock: second point is always the perpendicular foot in the finger's direction (never empty space)
+      // Hard lock: second point is always the perpendicular foot in the finger's direction
       const hit = nearestPerpWall(prev, p, Math.max(doc.sizes[page].w, doc.sizes[page].h));
       if (hit) {
         q = hit.foot.slice();
@@ -1845,7 +1898,11 @@ function aim(p, e, prev, exclude) {
         wallExt = hit.ext ? { a: hit.ext[0].slice(), b: hit.ext[1].slice() } : null;
       }
     } else {
-      const h = findSnap(ortho ? q : p, r, exclude, { sleeveR });
+      const h = findSnap(ortho ? q : p, r, exclude, {
+        sleeveR: cal ? 0 : sleeveR,
+        noSleeve: cal,
+        mode: cal ? 'calibrate' : (tool === 'line' ? 'measure' : 'place'),
+      });
       if (h) { snapHit = { p: h.p.slice(), kind: h.kind === 'sleeve' ? 'center' : h.kind }; q = h.p.slice();
         wallExt = null;
         if (ortho) { const hz = Math.abs(p[0] - prev[0]) >= Math.abs(p[1] - prev[1]); q = hz ? [h.p[0], prev[1]] : [prev[0], h.p[1]]; snapHit.p = q; }
@@ -1912,7 +1969,7 @@ $('#toWallBtn').onclick = () => applyToWall(null);
 const _draw3 = draw; draw = function () { _draw3(); if (snapHit && (PLACE.includes(tool) || ['count', 'sleeve', 'origin'].includes(tool) || gesture)) showSnapMark(); };
 const _loadDoc = loadDoc; loadDoc = async function (...a) { for (const k in geomCache) delete geomCache[k]; clearPageBaseCache(); const r = await _loadDoc(...a); return r; };
 vpEl.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !gesture) { snapHit = null; showSnapMark(); } });
-window.PMsnap = { buildGeom: pg => buildGeom(pg), ensureSleeveSnap: pg => ensureSleeveSnap(pg), findSnap, nearestPerpWall, isSleeveCentrePt, applyToWall, mergeCollinearSegs, get hit() { return snapHit; }, get wallExt() { return wallExt; }, geom: geomCache };
+window.PMsnap = { buildGeom: pg => buildGeom(pg), ensureSleeveSnap: pg => ensureSleeveSnap(pg), findSnap, nearestPerpWall, isSleeveCentrePt, applyToWall, mergeCollinearSegs, geomSnapRadius, sleeveSnapRadius, get hit() { return snapHit; }, get wallExt() { return wallExt; }, geom: geomCache };
 // Snap geometry is built when something uses it: CAD drawings, a page with sleeves, or a measuring tool in hand.
 // Building it on every open made heavy PDFs slower to open and is wasted when you only look at the plan.
 const snapTool = t => PLACE.includes(t) || ['count', 'sleeve', 'origin'].includes(t);
