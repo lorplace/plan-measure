@@ -1769,16 +1769,30 @@ let wallExt = null; // { a:[x,y], b:[x,y] } fictional wall continuation while ai
 function geomSnapRadius(touchR) {
   // Sensible at all zooms: ~24–28 CSS px, hard-capped in page space so a far endpoint
   // cannot steal a tap meant for a nearby dimension line / tick.
-  const rCss = touchR ? 28 : 14;
-  const cap = touchR ? 16 : 10;
+  const rCss = touchR ? 26 : 14;
+  const cap = touchR ? 12 : 9;
   return Math.min(rCss / zoom, cap);
 }
 function findSnap(p, r, exclude, opts) {
   const G = geomCache[page]; let best = null;
+  // Distance-weighted score: higher-priority kinds get a small bonus, but a nearby
+  // tick/endpoint still beats a distant intersection (fixes calibrate near-miss).
+  // pri: lower is better (legacy). bias adds to distance for scoring.
+  const biasOf = (kind, pri) => {
+    if (kind === 'perp' || kind === 'perp-ext') return -0.5;
+    if (kind === 'x') return 0;
+    if (kind === 'end' && pri < 0) return 0.6; // short tick end
+    if (kind === 'end' || kind === 'mid' || kind === 'center') return 1.8;
+    if (kind === 'line') return 3.2;
+    return 2;
+  };
   const consider = (q, kind, pri) => {
     if (!q || !isFinite(q[0]) || !isFinite(q[1])) return;
     const d = dist(p, q);
-    if (d <= r && (!best || pri < best.pri || (pri === best.pri && d < best.d))) best = { p: q, kind, pri, d };
+    if (d > r) return;
+    const score = d + biasOf(kind, pri);
+    if (!best || score < best.score - 1e-9 || (Math.abs(score - best.score) < 1e-9 && d < best.d))
+      best = { p: q, kind, pri, d, score };
   };
   opts = opts || {};
   const noSleeve = !!(opts.noSleeve || opts.mode === 'calibrate');
@@ -1819,9 +1833,17 @@ function findSnap(p, r, exclude, opts) {
       if (dist(foot, p) <= r) nearLines.push(s);
     }
     const near = nearLines.slice(0, 100);
-    // 4a) True intersections of nearby segments
+    // 4a) Intersections: prefer tick crossings and near-orthogonal pairs (dimension geometry)
     for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) {
-      const x = segX(near[i], near[j]); if (x) consider(x, 'x', -2);
+      const a = near[i], b = near[j];
+      const x = segX(a, b); if (!x) continue;
+      const la = Math.hypot(a[2] - a[0], a[3] - a[1]), lb = Math.hypot(b[2] - b[0], b[3] - b[1]);
+      const short = Math.min(la, lb) <= tickMax;
+      const adx = a[2] - a[0], ady = a[3] - a[1], bdx = b[2] - b[0], bdy = b[3] - b[1];
+      const denom = (la * lb) || 1;
+      const ortho = Math.abs(adx * bdx + ady * bdy) / denom < 0.35;
+      if (short || ortho) consider(x, 'x', -2);
+      else consider(x, 'x', 0); // weak — won't beat a nearby tick end
     }
     // 4b) T-junctions: short tick end lying on (or very near) a longer line → treat as intersection
     const tTol = Math.max(0.35, r * 0.08);
