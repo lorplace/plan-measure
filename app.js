@@ -640,7 +640,13 @@ function endPointer(e) {
   if (!gesture) return; const g = gesture;
   if (g.kind === 'pinch') { if (pointers.size === 0) gesture = null; return; }
   gesture = null;
-  if (g.kind === 'place') { hideLoupe(); hover = null; if (e.type === 'pointerup') clickAt(pagePt(e, !!g.moved), e); else draw(); return; }
+  if (g.kind === 'place') {
+    const locked = hover; // last placeSnap under the loupe (already on vector geom when snapHit)
+    hideLoupe(); hover = null;
+    if (e.type === 'pointerup') clickAt(locked || pagePt(e, !!g.moved), e);
+    else draw();
+    return;
+  }
   if (g.kind === 'dpt') { if (e.pointerType !== 'mouse') hideLoupe(); draw(); return; }
   if (g.kind === 'vertex' || g.kind === 'move') { changed(); return; }
   if (g.kind === 'pan') { if (g.desel && !g.moved) { selId = null; draw(); } return; }
@@ -1146,20 +1152,41 @@ async function fillWallsFromOps(G, d, pg, ops, gen) {
   const vp = d.vps[pg], OPS = pdfjsLib.OPS, U = pdfjsLib.Util;
   const heavy = isPhoneDev && ops.fnArray.length > 350000;
   // Keep short dimension ticks in the snap grid (min ~0.05). Wall merge filters longer runs later.
-  const MAXS = heavy ? 120000 : 200000;
+  // On heavy sheets, RESERVE a tick bank so late-drawn dimension marks are not dropped by MAXS.
+  const MAXS = heavy ? 140000 : 200000;
   const minLen = 0.05;
   const wallMin = heavy ? Math.max(2.0, 0.003 * Math.min(doc.sizes[pg].w, doc.sizes[pg].h)) : 0;
-  let sx = new Float64Array(4 * 4096), n = 0, ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm); const stack = [];
+  const tickMaxKeep = Math.max(8, 0.012 * Math.min(doc.sizes[pg].w, doc.sizes[pg].h));
+  const TICK_CAP = heavy ? Math.floor(MAXS * 0.4) : MAXS; // up to 40% reserved for short ticks
+  const LONG_CAP = MAXS - Math.min(TICK_CAP, Math.floor(MAXS * 0.25));
+  let tickSx = new Float64Array(4 * 2048), nTick = 0;
+  let longSx = new Float64Array(4 * 4096), nLong = 0;
+  let ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm); const stack = [];
   const setCtm = m => { ctm = m; M = U.transform(vp.transform, m); };
+  const pushBuf = (bufName, x1, y1, x2, y2) => {
+    if (bufName === 'tick') {
+      if (nTick >= TICK_CAP) return;
+      if (4 * nTick + 4 > tickSx.length) {
+        const b = new Float64Array(Math.min(4 * TICK_CAP, tickSx.length * 2)); b.set(tickSx); tickSx = b;
+      }
+      const o = 4 * nTick++; tickSx[o] = x1; tickSx[o + 1] = y1; tickSx[o + 2] = x2; tickSx[o + 3] = y2;
+    } else {
+      if (nLong >= LONG_CAP) return;
+      if (4 * nLong + 4 > longSx.length) {
+        const b = new Float64Array(Math.min(4 * LONG_CAP, longSx.length * 2)); b.set(longSx); longSx = b;
+      }
+      const o = 4 * nLong++; longSx[o] = x1; longSx[o + 1] = y1; longSx[o + 2] = x2; longSx[o + 3] = y2;
+    }
+  };
   const add = (x1, y1, x2, y2) => {
-    if (n >= MAXS) return;
     const L = Math.hypot(x2 - x1, y2 - y1);
     if (L <= minLen) return;
-    if (4 * n + 4 > sx.length) { const b = new Float64Array(Math.min(4 * MAXS, sx.length * 2)); b.set(sx); sx = b; }
-    const o = 4 * n++; sx[o] = x1; sx[o + 1] = y1; sx[o + 2] = x2; sx[o + 3] = y2;
+    if (L <= tickMaxKeep) pushBuf('tick', x1, y1, x2, y2);
+    else pushBuf('long', x1, y1, x2, y2);
   };
   const GEOM_CHUNK = isPhoneDev ? (heavy ? 4000 : 8000) : 80000;
-  for (let i = 0; i < ops.fnArray.length && n < MAXS; i++) {
+  for (let i = 0; i < ops.fnArray.length; i++) {
+    if (nTick >= TICK_CAP && nLong >= LONG_CAP) break;
     if (i && (i % GEOM_CHUNK) === 0) {
       if (doc !== d || openBusy) { if (geomCache[pg] === G && !gen) delete geomCache[pg]; return G; }
       if (gen && G._wallGen !== gen) return G;
@@ -1183,7 +1210,19 @@ async function fillWallsFromOps(G, d, pg, ops, gen) {
       } } }
   if (gen && G._wallGen !== gen) return G;
   if (doc !== d) return G;
-  sx = sx.slice(0, 4 * n); G.px = sx;
+  // Merge tick bank first (calibrate/dimension locks), then longer strokes, up to MAXS
+  const n = Math.min(MAXS, nTick + nLong);
+  const sx = new Float64Array(4 * n);
+  let w = 0;
+  for (let i = 0; i < nTick && w < n; i++, w++) {
+    const o = 4 * i, d0 = 4 * w;
+    sx[d0] = tickSx[o]; sx[d0 + 1] = tickSx[o + 1]; sx[d0 + 2] = tickSx[o + 2]; sx[d0 + 3] = tickSx[o + 3];
+  }
+  for (let i = 0; i < nLong && w < n; i++, w++) {
+    const o = 4 * i, d0 = 4 * w;
+    sx[d0] = longSx[o]; sx[d0 + 1] = longSx[o + 1]; sx[d0 + 2] = longSx[o + 2]; sx[d0 + 3] = longSx[o + 3];
+  }
+  G.px = sx;
   G.segs = new Proxy({ length: n }, { get: (o, k) => k === 'length' ? n : (typeof k === 'string' && /^\d+$/.test(k)) ? [sx[4 * k], sx[4 * k + 1], sx[4 * k + 2], sx[4 * k + 3]] : undefined });
   G.grid = new Map();
   for (let i = 0; i < n; i++) gridAdd(G.grid, i, sx[4 * i], sx[4 * i + 1], sx[4 * i + 2], sx[4 * i + 3]);
