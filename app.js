@@ -1780,11 +1780,12 @@ function findSnap(p, r, exclude, opts) {
   // pri: lower is better (legacy). bias adds to distance for scoring.
   const biasOf = (kind, pri) => {
     if (kind === 'perp' || kind === 'perp-ext') return -0.5;
-    if (kind === 'x') return 0;
-    if (kind === 'end' && pri < 0) return 0.6; // short tick end
-    if (kind === 'end' || kind === 'mid' || kind === 'center') return 1.8;
-    if (kind === 'line') return 3.2;
-    return 2;
+    // Tick ends + strong (ortho/tick) intersections share the top tier — closest wins.
+    if (kind === 'x') return pri < 0 ? 0 : 2.5; // oblique crossings demoted
+    if (kind === 'end' && pri < 0) return 0; // short tick end
+    if (kind === 'end' || kind === 'mid' || kind === 'center') return 2.0;
+    if (kind === 'line') return 3.5;
+    return 2.2;
   };
   const consider = (q, kind, pri) => {
     if (!q || !isFinite(q[0]) || !isFinite(q[1])) return;
