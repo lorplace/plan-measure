@@ -853,7 +853,7 @@ async function openGuarded(id) {
   }
 }
 // test hook
-window.PM = { undo: () => undo(), redo: () => redo(), get hist() { return { u: H.u.length, r: H.r.length }; }, get draft() { return draft; }, get proj() { return proj; }, get doc() { return doc; }, measure, buildCSV, buildPDF, setTool, gotoPage, applyScale, get zoom() { return zoom; } };
+window.PM = { undo: () => undo(), redo: () => redo(), get hist() { return { u: H.u.length, r: H.r.length }; }, get draft() { return draft; }, get proj() { return proj; }, get doc() { return doc; }, measure, buildCSV, buildPDF, setTool, gotoPage, applyScale, setZoom, clickAt, get zoom() { return zoom; } };
 $('#calVal').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); $('#calDlg').close('ok'); } });
 // ---- icons: inject the inline SVG named by data-icon, wrap the label in .t ----
 document.querySelectorAll('[data-icon]').forEach(b => { const txt = [...b.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
@@ -2446,7 +2446,16 @@ function drawGuideSvg(g) { if (!guide || !draft) return; const w = 1.2 / zoom, A
   b.onclick = () => { straightOn = !straightOn; localStorage.setItem('pm-straight', straightOn ? '1' : '0'); b.classList.toggle('on', straightOn); b.setAttribute('aria-pressed', String(straightOn)); guide = null; showSnapMark(); toast('Auto straight ' + (straightOn ? 'on' : 'off')); }; })();
 const _ldS = loadDoc; loadDoc = async function (...a) { domAng = null; return _ldS(...a); };
 const _gpS = gotoPage; gotoPage = function (...a) { domAng = null; return _gpS(...a); };
-Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim = (p, prev, alt) => aim(p, { altKey: !!alt, pointerType: 'mouse' }, prev, null); window.PM.domAngle = () => dominantAngle();
+Object.defineProperty(window.PM, 'guide', { get: () => guide }); window.PM.aim = (p, prevOrE, altOrPrev) => {
+  let e, prev;
+  if (prevOrE && typeof prevOrE === 'object' && !Array.isArray(prevOrE) && ('pointerType' in prevOrE || 'altKey' in prevOrE || 'shiftKey' in prevOrE)) {
+    e = prevOrE; prev = Array.isArray(altOrPrev) ? altOrPrev : null;
+  } else {
+    e = { altKey: !!altOrPrev, pointerType: 'touch', shiftKey: false };
+    prev = Array.isArray(prevOrE) ? prevOrE : null;
+  }
+  return aim(p, e, prev, null);
+}; window.PM.domAngle = () => dominantAngle();
 // iOS: stop long-press selection / callout inside the plan area (pinch and pan are handled by pointer events)
 (function () { const v = vpEl, plan = e => !e.target.closest('input,textarea,select,button,label,a,[contenteditable],#empty');
   v.addEventListener('touchstart', e => { if (plan(e) && e.touches.length === 1) e.preventDefault(); }, { passive: false });
