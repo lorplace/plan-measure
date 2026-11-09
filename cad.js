@@ -167,7 +167,12 @@ function draw(ctx, M, S, ox, oy, hidden, reg) {
   ctx.save(); ctx.setTransform(S, 0, 0, S, ox, oy); ctx.lineWidth = Math.max(1, S * 0.6) / S; ctx.lineCap = 'round';
   reg = reg || { x0: 0, y0: 0, w: M.w, h: M.h };
   const hk = JSON.stringify(hidden), lod = Math.max(-6, Math.min(4, Math.floor(Math.log2(S)))), minL = 0.4 / Math.pow(2, lod);
-  if (M._hidKey !== hk || M._lod !== lod) { M._hidKey = hk; M._lod = lod; M._tp = new Map(); M._hidL = M.layerNames.map(n => !!hidden[n]); }
+  // Path caches per level of detail: the magnifier draws at a finer level than the plan, so keeping one cache per level
+  // (latest few) stops each lens render from throwing away the plan's paths and the next plan draw from rebuilding them.
+  if (M._hidKey !== hk) { M._hidKey = hk; M._tpL = new Map(); M._hidL = M.layerNames.map(n => !!hidden[n]); }
+  if (!M._tpL) M._tpL = new Map();
+  M._tp = M._tpL.get(lod); if (!M._tp) { M._tp = new Map(); M._tpL.set(lod, M._tp); while (M._tpL.size > 3) M._tpL.delete(M._tpL.keys().next().value); }
+  else { M._tpL.delete(lod); M._tpL.set(lod, M._tp); } M._lod = lod;
   const T = tileIndex(M), sx = M.sx, hidL = M._hidL, done = M._big || (M._big = new Uint8Array(M.nSegs));
   const build = ids => { const by = {}; for (const i of ids) { if (hidL[M.sL[i]]) continue; const x1 = sx[4 * i], y1 = sx[4 * i + 1], x2 = sx[4 * i + 2], y2 = sx[4 * i + 3]; if (Math.abs(x2 - x1) + Math.abs(y2 - y1) < minL) continue; const c = M.colors[M.sC[i]], p = by[c] || (by[c] = new Path2D()); p.moveTo(x1, y1); p.lineTo(x2, y2); } return by; };
   const c0 = Math.max(0, Math.floor(reg.x0 / T.tw)), c1 = Math.min(TN - 1, Math.floor((reg.x0 + reg.w) / T.tw)), r0 = Math.max(0, Math.floor(reg.y0 / T.th)), r1 = Math.min(TN - 1, Math.floor((reg.y0 + reg.h) / T.th));

@@ -936,9 +936,24 @@ function placeSnap(p, e) { return aim(p, e, draft && draft.pts.length ? draft.pt
 function toggleLoupe() { loupeOn = !loupeOn; localStorage.setItem('pm-loupe', loupeOn ? '1' : '0'); $('#loupeBtn').classList.toggle('on', loupeOn); $('#loupeBtn').setAttribute('aria-pressed', String(loupeOn)); if (!loupeOn) hideLoupe(); toast('Magnifier ' + (loupeOn ? 'on' : 'off')); }
 $('#loupeBtn').classList.toggle('on', loupeOn); $('#loupeBtn').setAttribute('aria-pressed', String(loupeOn)); $('#loupeBtn').onclick = toggleLoupe;
 function hideLoupe() { lc.style.display = 'none'; loupeWant = null; }
+// Loupe pixels: capped at 2x like the plan bitmaps. A 3x iPhone otherwise needs a 420 px buffer and a 1.5x bigger render each rest.
+const loupeDpr = () => Math.min(window.devicePixelRatio || 1, 2);
+// Copy page rect (x0,y0,w,h in page units) of a plan bitmap into ctx (L x L), clipping the source rect to the bitmap first:
+// older iOS Safari draws nothing at all when the source rect pokes past the bitmap edge (WebKit bug 116991).
+function blitPlan(ctx, src, g0, k, x0, y0, sz, L) {
+  if (!src || !src.width || !src.height) return false;
+  let sx = (x0 - g0.x0) * k, sy = (y0 - g0.y0) * k, sw = sz * k, sh = sz * k; const f = L / sw;
+  let dx = 0, dy = 0, dw = L, dh = L;
+  if (sx < 0) { dx -= sx * f; dw += sx * f; sw += sx; sx = 0; }
+  if (sy < 0) { dy -= sy * f; dh += sy * f; sh += sy; sy = 0; }
+  if (sx + sw > src.width) { const o = sx + sw - src.width; sw -= o; dw -= o * f; }
+  if (sy + sh > src.height) { const o = sy + sh - src.height; sh -= o; dh -= o * f; }
+  if (!(sw > 0.5 && sh > 0.5 && dw > 0 && dh > 0)) return false;
+  try { ctx.drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh); return true; } catch (err) { return false; }
+}
 function showLoupe(p, e) {
   if (!loupeOn || !doc || !p) return hideLoupe();
-  const dpr = window.devicePixelRatio || 1, L = Math.round(LSZ * dpr);
+  const dpr = loupeDpr(), L = Math.round(LSZ * dpr);
   if (lc.width !== L) { lc.width = L; lc.height = L; }
   const touch = e.pointerType && e.pointerType !== 'mouse';
   const lifting = touch && (gesture && gesture.moved || e._aimLift);
@@ -952,31 +967,50 @@ function showLoupe(p, e) {
   lc.style.left = x + 'px'; lc.style.top = y + 'px'; lc.style.display = 'block';
   const mag = +$('#loupeMag').value, S = zoom * mag * dpr; // device px per page unit inside loupe
   const ctx = lc.getContext('2d');
-  // instant preview from what is already drawn: the detail layer where it covers the loupe, otherwise the base
-  const half = L / 2 / S, key = viewKey(), useDetail = !!(canvas._on && canvas._key === key && canvas._reg && covers(canvas._reg, { x0: p[0] - half, y0: p[1] - half, w: 2 * half, h: 2 * half }));
-  const src = useDetail ? canvas : base, g0 = useDetail ? canvas._reg : { x0: 0, y0: 0, w: doc.sizes[page].w }, k = src.width / g0.w;
+  // Instant preview from what is already drawn. The whole-page base goes down first and the sharper detail layer on top,
+  // so a detail bitmap Safari has silently dropped (iOS canvas memory limit: it still has a size but draws as nothing)
+  // can no longer leave the lens white: the base shows through.
+  const half = L / 2 / S, key = viewKey();
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, L, L);
-  if (src.width && (useDetail || base._key === key)) ctx.drawImage(src, (p[0] - g0.x0 - half) * k, (p[1] - g0.y0 - half) * k, 2 * half * k, 2 * half * k, 0, 0, L, L);
+  if (base._key === key && base._ok && base.width) blitPlan(ctx, base, { x0: 0, y0: 0 }, base.width / doc.sizes[page].w, p[0] - half, p[1] - half, 2 * half, L);
+  if (canvas._on && canvas._key === key && canvas._reg && canvas.width) blitPlan(ctx, canvas, canvas._reg, canvas.width / canvas._reg.w, p[0] - half, p[1] - half, 2 * half, L);
   loupeOverlay(ctx, p, S, L);
   // the sharp version waits until the finger rests: on a heavy plan each one redraws the whole page
   loupeWant = { p: p.slice(), S, L, pg: page }; lc.dataset.sharp = ''; clearTimeout(sharpLoupe.t); sharpLoupe.t = setTimeout(sharpLoupe, 120);
 }
-const loupeBuf = document.createElement('canvas'); loupeBuf.width = loupeBuf.height = 0;
+// One small fixed buffer for the sharp render, made at start-up (before the plan bitmaps take the canvas budget) and never
+// resized to 0, so it does not have to win a new allocation on a phone that is already at Safari's canvas memory limit.
+// willReadFrequently keeps it in CPU memory, which makes the blank check below cheap.
+const loupeBuf = document.createElement('canvas'); loupeBuf.width = loupeBuf.height = Math.round(LSZ * loupeDpr());
+let loupeBufCtx = null; try { loupeBufCtx = loupeBuf.getContext('2d', { willReadFrequently: true }); } catch (err) { }
+// True when the buffer holds any plan ink. Safari can finish a render "successfully" and leave the buffer blank or zeroed.
+function hasInk(c, cx) {
+  try { const d = cx.getImageData(0, 0, c.width, c.height).data;
+    for (let i = 0; i < d.length; i += 4) { if (d[i + 3] && d[i] + d[i + 1] + d[i + 2] < 735) return true; } } catch (err) { }
+  return false; }
 async function sharpLoupe() {
   if (loupeBusy || !loupeWant) return; const w = loupeWant; loupeBusy = true;
   try {
-    const off = loupeBuf; if (off.width !== w.L || off.height !== w.L) { off.width = w.L; off.height = w.L; } const oc = off.getContext('2d'); oc.fillStyle = '#fff'; oc.fillRect(0, 0, w.L, w.L);
-    if (doc.type === 'pdf') { const pg = await doc.pdf.getPage(w.pg); const vp = pg.getViewport({ scale: w.S, offsetX: -(w.p[0] * w.S - w.L / 2), offsetY: -(w.p[1] * w.S - w.L / 2) });
-      await pg.render({ canvasContext: oc, viewport: vp }).promise; }
-    else if (doc.type === 'cad') { CAD.draw(oc, doc.cad, w.S, -(w.p[0] * w.S - w.L / 2), -(w.p[1] * w.S - w.L / 2), proj.hidden || {}); }
-    else { const h = w.L / 2 / w.S; oc.imageSmoothingEnabled = false; oc.drawImage(doc.img, w.p[0] - h, w.p[1] - h, 2 * h, 2 * h, 0, 0, w.L, w.L); }
+    const off = loupeBuf; if (off.width !== w.L || off.height !== w.L) { off.width = w.L; off.height = w.L; loupeBufCtx = null; }
+    const oc = loupeBufCtx || (loupeBufCtx = off.getContext('2d', { willReadFrequently: true }));
+    if (!oc) throw new Error('no loupe context');
+    oc.setTransform(1, 0, 0, 1, 0, 0); oc.fillStyle = '#fff'; oc.fillRect(0, 0, w.L, w.L);
+    const h = w.L / 2 / w.S, reg = { x0: w.p[0] - h, y0: w.p[1] - h, w: 2 * h, h: 2 * h };
+    if (doc.type === 'pdf') { const pg = await doc.pdf.getPage(w.pg);
+      // same call shape as the plan render (scale + translate): only the lens area lands in the buffer
+      await pg.render({ canvasContext: oc, viewport: pg.getViewport({ scale: w.S }), transform: [1, 0, 0, 1, -reg.x0 * w.S, -reg.y0 * w.S] }).promise; }
+    else if (doc.type === 'cad') { CAD.draw(oc, doc.cad, w.S, -reg.x0 * w.S, -reg.y0 * w.S, proj.hidden || {}, reg); }
+    else { oc.imageSmoothingEnabled = false; blitPlan(oc, doc.img, { x0: 0, y0: 0 }, 1, reg.x0, reg.y0, reg.w, w.L); }
     if (loupeWant && lc.style.display !== 'none' && loupeWant.pg === w.pg) { const cur = loupeWant, ctx = lc.getContext('2d');
-      if (cur.p[0] === w.p[0] && cur.p[1] === w.p[1] && cur.S === w.S) { ctx.drawImage(off, 0, 0); loupeOverlay(ctx, w.p, w.S, w.L); lc.dataset.sharp = '1'; } }
-  } catch (err) { }
+      if (cur.p[0] === w.p[0] && cur.p[1] === w.p[1] && cur.S === w.S) {
+        // Only replace the preview with real ink: a blank result keeps the (softer) preview rather than a white lens.
+        if (hasInk(off, oc)) { ctx.drawImage(off, 0, 0); loupeOverlay(ctx, w.p, w.S, w.L); lc.dataset.sharp = '1'; }
+        else lc.dataset.sharp = '0'; } }
+  } catch (err) { if (loupeWant) lc.dataset.sharp = '0'; console.warn('sharpLoupe', err && err.message || err); }
   loupeBusy = false; if (loupeWant && (loupeWant.p[0] !== w.p[0] || loupeWant.p[1] !== w.p[1] || loupeWant.S !== w.S)) { lc.dataset.sharp = ''; clearTimeout(sharpLoupe.t); sharpLoupe.t = setTimeout(sharpLoupe, 120); }
 }
 function loupeOverlay(ctx, p, S, L) {
-  const T = q => [(q[0] - p[0]) * S + L / 2, (q[1] - p[1]) * S + L / 2], dpr = window.devicePixelRatio || 1;
+  const T = q => [(q[0] - p[0]) * S + L / 2, (q[1] - p[1]) * S + L / 2], dpr = L / LSZ;
   if (draft && draft.pts.length) { ctx.strokeStyle = draft.color; ctx.lineWidth = 1.5 * dpr; ctx.beginPath(); draft.pts.forEach((q, i) => { const [x, y] = T(q); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); if (!(draft.type === 'calibrate' && draft.pts.length === 2) && hover) { const [x, y] = T(hover); ctx.lineTo(x, y); } ctx.stroke();
     draft.pts.forEach((q, i) => { const [x, y] = T(q); ctx.beginPath(); ctx.arc(x, y, (i === calSel ? 5 : 3) * dpr, 0, 7); ctx.strokeStyle = i === calSel ? '#ffb300' : draft.color; ctx.stroke(); }); }
   if (guide) { ctx.save(); ctx.setLineDash([5 * dpr, 4 * dpr]); ctx.strokeStyle = '#2962ff'; ctx.lineWidth = 1.2 * dpr; for (const [a, b] of guideLines(guide, L / S)) { const A = T(a), B = T(b); ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke(); } ctx.restore(); }
