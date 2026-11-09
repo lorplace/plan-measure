@@ -936,9 +936,24 @@ function placeSnap(p, e) { return aim(p, e, draft && draft.pts.length ? draft.pt
 function toggleLoupe() { loupeOn = !loupeOn; localStorage.setItem('pm-loupe', loupeOn ? '1' : '0'); $('#loupeBtn').classList.toggle('on', loupeOn); $('#loupeBtn').setAttribute('aria-pressed', String(loupeOn)); if (!loupeOn) hideLoupe(); toast('Magnifier ' + (loupeOn ? 'on' : 'off')); }
 $('#loupeBtn').classList.toggle('on', loupeOn); $('#loupeBtn').setAttribute('aria-pressed', String(loupeOn)); $('#loupeBtn').onclick = toggleLoupe;
 function hideLoupe() { lc.style.display = 'none'; loupeWant = null; }
+// Loupe pixels: capped at 2x like the plan bitmaps. A 3x iPhone otherwise needs a 420 px buffer and a 1.5x bigger render each rest.
+const loupeDpr = () => Math.min(window.devicePixelRatio || 1, 2);
+// Copy page rect (x0,y0,w,h in page units) of a plan bitmap into ctx (L x L), clipping the source rect to the bitmap first:
+// older iOS Safari draws nothing at all when the source rect pokes past the bitmap edge (WebKit bug 116991).
+function blitPlan(ctx, src, g0, k, x0, y0, sz, L) {
+  if (!src || !src.width || !src.height) return false;
+  let sx = (x0 - g0.x0) * k, sy = (y0 - g0.y0) * k, sw = sz * k, sh = sz * k; const f = L / sw;
+  let dx = 0, dy = 0, dw = L, dh = L;
+  if (sx < 0) { dx -= sx * f; dw += sx * f; sw += sx; sx = 0; }
+  if (sy < 0) { dy -= sy * f; dh += sy * f; sh += sy; sy = 0; }
+  if (sx + sw > src.width) { const o = sx + sw - src.width; sw -= o; dw -= o * f; }
+  if (sy + sh > src.height) { const o = sy + sh - src.height; sh -= o; dh -= o * f; }
+  if (!(sw > 0.5 && sh > 0.5 && dw > 0 && dh > 0)) return false;
+  try { ctx.drawImage(src, sx, sy, sw, sh, dx, dy, dw, dh); return true; } catch (err) { return false; }
+}
 function showLoupe(p, e) {
   if (!loupeOn || !doc || !p) return hideLoupe();
-  const dpr = window.devicePixelRatio || 1, L = Math.round(LSZ * dpr);
+  const dpr = loupeDpr(), L = Math.round(LSZ * dpr);
   if (lc.width !== L) { lc.width = L; lc.height = L; }
   const touch = e.pointerType && e.pointerType !== 'mouse';
   const lifting = touch && (gesture && gesture.moved || e._aimLift);
@@ -952,31 +967,50 @@ function showLoupe(p, e) {
   lc.style.left = x + 'px'; lc.style.top = y + 'px'; lc.style.display = 'block';
   const mag = +$('#loupeMag').value, S = zoom * mag * dpr; // device px per page unit inside loupe
   const ctx = lc.getContext('2d');
-  // instant preview from what is already drawn: the detail layer where it covers the loupe, otherwise the base
-  const half = L / 2 / S, key = viewKey(), useDetail = !!(canvas._on && canvas._key === key && canvas._reg && covers(canvas._reg, { x0: p[0] - half, y0: p[1] - half, w: 2 * half, h: 2 * half }));
-  const src = useDetail ? canvas : base, g0 = useDetail ? canvas._reg : { x0: 0, y0: 0, w: doc.sizes[page].w }, k = src.width / g0.w;
+  // Instant preview from what is already drawn. The whole-page base goes down first and the sharper detail layer on top,
+  // so a detail bitmap Safari has silently dropped (iOS canvas memory limit: it still has a size but draws as nothing)
+  // can no longer leave the lens white: the base shows through.
+  const half = L / 2 / S, key = viewKey();
   ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, L, L);
-  if (src.width && (useDetail || base._key === key)) ctx.drawImage(src, (p[0] - g0.x0 - half) * k, (p[1] - g0.y0 - half) * k, 2 * half * k, 2 * half * k, 0, 0, L, L);
+  if (base._key === key && base._ok && base.width) blitPlan(ctx, base, { x0: 0, y0: 0 }, base.width / doc.sizes[page].w, p[0] - half, p[1] - half, 2 * half, L);
+  if (canvas._on && canvas._key === key && canvas._reg && canvas.width) blitPlan(ctx, canvas, canvas._reg, canvas.width / canvas._reg.w, p[0] - half, p[1] - half, 2 * half, L);
   loupeOverlay(ctx, p, S, L);
   // the sharp version waits until the finger rests: on a heavy plan each one redraws the whole page
   loupeWant = { p: p.slice(), S, L, pg: page }; lc.dataset.sharp = ''; clearTimeout(sharpLoupe.t); sharpLoupe.t = setTimeout(sharpLoupe, 120);
 }
-const loupeBuf = document.createElement('canvas'); loupeBuf.width = loupeBuf.height = 0;
+// One small fixed buffer for the sharp render, made at start-up (before the plan bitmaps take the canvas budget) and never
+// resized to 0, so it does not have to win a new allocation on a phone that is already at Safari's canvas memory limit.
+// willReadFrequently keeps it in CPU memory, which makes the blank check below cheap.
+const loupeBuf = document.createElement('canvas'); loupeBuf.width = loupeBuf.height = Math.round(LSZ * loupeDpr());
+let loupeBufCtx = null; try { loupeBufCtx = loupeBuf.getContext('2d', { willReadFrequently: true }); } catch (err) { }
+// True when the buffer holds any plan ink. Safari can finish a render "successfully" and leave the buffer blank or zeroed.
+function hasInk(c, cx) {
+  try { const d = cx.getImageData(0, 0, c.width, c.height).data;
+    for (let i = 0; i < d.length; i += 4) { if (d[i + 3] && d[i] + d[i + 1] + d[i + 2] < 735) return true; } } catch (err) { }
+  return false; }
 async function sharpLoupe() {
   if (loupeBusy || !loupeWant) return; const w = loupeWant; loupeBusy = true;
   try {
-    const off = loupeBuf; if (off.width !== w.L || off.height !== w.L) { off.width = w.L; off.height = w.L; } const oc = off.getContext('2d'); oc.fillStyle = '#fff'; oc.fillRect(0, 0, w.L, w.L);
-    if (doc.type === 'pdf') { const pg = await doc.pdf.getPage(w.pg); const vp = pg.getViewport({ scale: w.S, offsetX: -(w.p[0] * w.S - w.L / 2), offsetY: -(w.p[1] * w.S - w.L / 2) });
-      await pg.render({ canvasContext: oc, viewport: vp }).promise; }
-    else if (doc.type === 'cad') { CAD.draw(oc, doc.cad, w.S, -(w.p[0] * w.S - w.L / 2), -(w.p[1] * w.S - w.L / 2), proj.hidden || {}); }
-    else { const h = w.L / 2 / w.S; oc.imageSmoothingEnabled = false; oc.drawImage(doc.img, w.p[0] - h, w.p[1] - h, 2 * h, 2 * h, 0, 0, w.L, w.L); }
+    const off = loupeBuf; if (off.width !== w.L || off.height !== w.L) { off.width = w.L; off.height = w.L; loupeBufCtx = null; }
+    const oc = loupeBufCtx || (loupeBufCtx = off.getContext('2d', { willReadFrequently: true }));
+    if (!oc) throw new Error('no loupe context');
+    oc.setTransform(1, 0, 0, 1, 0, 0); oc.fillStyle = '#fff'; oc.fillRect(0, 0, w.L, w.L);
+    const h = w.L / 2 / w.S, reg = { x0: w.p[0] - h, y0: w.p[1] - h, w: 2 * h, h: 2 * h };
+    if (doc.type === 'pdf') { const pg = await doc.pdf.getPage(w.pg);
+      // same call shape as the plan render (scale + translate): only the lens area lands in the buffer
+      await pg.render({ canvasContext: oc, viewport: pg.getViewport({ scale: w.S }), transform: [1, 0, 0, 1, -reg.x0 * w.S, -reg.y0 * w.S] }).promise; }
+    else if (doc.type === 'cad') { CAD.draw(oc, doc.cad, w.S, -reg.x0 * w.S, -reg.y0 * w.S, proj.hidden || {}, reg); }
+    else { oc.imageSmoothingEnabled = false; blitPlan(oc, doc.img, { x0: 0, y0: 0 }, 1, reg.x0, reg.y0, reg.w, w.L); }
     if (loupeWant && lc.style.display !== 'none' && loupeWant.pg === w.pg) { const cur = loupeWant, ctx = lc.getContext('2d');
-      if (cur.p[0] === w.p[0] && cur.p[1] === w.p[1] && cur.S === w.S) { ctx.drawImage(off, 0, 0); loupeOverlay(ctx, w.p, w.S, w.L); lc.dataset.sharp = '1'; } }
-  } catch (err) { }
+      if (cur.p[0] === w.p[0] && cur.p[1] === w.p[1] && cur.S === w.S) {
+        // Only replace the preview with real ink: a blank result keeps the (softer) preview rather than a white lens.
+        if (hasInk(off, oc)) { ctx.drawImage(off, 0, 0); loupeOverlay(ctx, w.p, w.S, w.L); lc.dataset.sharp = '1'; }
+        else lc.dataset.sharp = '0'; } }
+  } catch (err) { if (loupeWant) lc.dataset.sharp = '0'; console.warn('sharpLoupe', err && err.message || err); }
   loupeBusy = false; if (loupeWant && (loupeWant.p[0] !== w.p[0] || loupeWant.p[1] !== w.p[1] || loupeWant.S !== w.S)) { lc.dataset.sharp = ''; clearTimeout(sharpLoupe.t); sharpLoupe.t = setTimeout(sharpLoupe, 120); }
 }
 function loupeOverlay(ctx, p, S, L) {
-  const T = q => [(q[0] - p[0]) * S + L / 2, (q[1] - p[1]) * S + L / 2], dpr = window.devicePixelRatio || 1;
+  const T = q => [(q[0] - p[0]) * S + L / 2, (q[1] - p[1]) * S + L / 2], dpr = L / LSZ;
   if (draft && draft.pts.length) { ctx.strokeStyle = draft.color; ctx.lineWidth = 1.5 * dpr; ctx.beginPath(); draft.pts.forEach((q, i) => { const [x, y] = T(q); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); if (!(draft.type === 'calibrate' && draft.pts.length === 2) && hover) { const [x, y] = T(hover); ctx.lineTo(x, y); } ctx.stroke();
     draft.pts.forEach((q, i) => { const [x, y] = T(q); ctx.beginPath(); ctx.arc(x, y, (i === calSel ? 5 : 3) * dpr, 0, 7); ctx.strokeStyle = i === calSel ? '#ffb300' : draft.color; ctx.stroke(); }); }
   if (guide) { ctx.save(); ctx.setLineDash([5 * dpr, 4 * dpr]); ctx.strokeStyle = '#2962ff'; ctx.lineWidth = 1.2 * dpr; for (const [a, b] of guideLines(guide, L / S)) { const A = T(a), B = T(b); ctx.beginPath(); ctx.moveTo(A[0], A[1]); ctx.lineTo(B[0], B[1]); ctx.stroke(); } ctx.restore(); }
@@ -992,7 +1026,9 @@ function loupeOverlay(ctx, p, S, L) {
   ctx.fillStyle = snapHit ? '#00c853' : '#e53935'; ctx.fillRect(c - dpr / 2, c - dpr / 2, dpr, dpr);
   ctx.fillStyle = '#263238cc'; ctx.fillRect(L / 2 - 16 * dpr, L - 18 * dpr, 32 * dpr, 14 * dpr); ctx.fillStyle = '#fff'; ctx.font = `${10 * dpr}px sans-serif`; ctx.textAlign = 'center'; ctx.fillText($('#loupeMag').value + 'x', L / 2, L - 7 * dpr);
 }
-function nudge(dx, dy) { if (!draft || !draft.pts.length) return; const i = Math.min(calSel, draft.pts.length - 1), q = draft.pts[i]; draft.pts[i] = [q[0] + dx / zoom, q[1] + dy / zoom]; draw();
+function nudge(dx, dy) { if (!draft || !draft.pts.length) return; const i = Math.min(calSel, draft.pts.length - 1), q = draft.pts[i]; draft.pts[i] = [q[0] + dx / zoom, q[1] + dy / zoom];
+  // Fine nudge stays free — never re-snap after arrow/button nudge (override stuck markup snaps)
+  snapHit = null; showSnapMark(); draw();
   const r = svg.getBoundingClientRect(); showLoupe(draft.pts[i], { clientX: r.left + draft.pts[i][0] * zoom, clientY: r.top + draft.pts[i][1] * zoom, pointerType: phoneMQ.matches ? 'touch' : 'mouse' }); clearTimeout(nudge.t); nudge.t = setTimeout(hideLoupe, 1500); }
 document.querySelectorAll('.nud').forEach(b => b.onclick = () => { const [x, y] = b.dataset.n.split(',').map(Number); nudge(x, y); });
 $('#ptSel').onclick = () => { if (draft && draft.pts.length > 1) { calSel = (calSel + 1) % draft.pts.length; draw(); } };
@@ -1040,7 +1076,7 @@ function gridAdd(grid, i, x1, y1, x2, y2) {
 }
 function extractAxisSegs(pix) {
   // Scan axis-aligned dark runs, allowing small gaps so dashed/broken walls become one segment.
-  const { width: W, height: Hh, data } = pix, dark = (x, y) => x >= 0 && y >= 0 && x < W && y < Hh && (data[(y * W + x) * 4] * .3 + data[(y * W + x) * 4 + 1] * .59 + data[(y * W + x) * 4 + 2] * .11) < 110;
+  const { width: W, height: Hh, data } = pix, dark = (x, y) => { if (x < 0 || y < 0 || x >= W || y >= Hh) return false; const i = (y * W + x) * 4; return isPlanDarkPx(data[i], data[i + 1], data[i + 2]); };
   const gap = Math.max(20, Math.round(0.025 * Math.min(W, Hh))); // allow typical dashed-line gaps
   const minL = Math.max(18, 0.02 * Math.min(W, Hh)), segs = [], step = 2;
   for (let y = 0; y < Hh; y += step) {
@@ -1143,10 +1179,57 @@ async function buildGeom(pg) {
   try { syncToWallUi(); } catch (e) { }
   return G;
 }
+
+function pdfColorToRgb(c) {
+  // pdf.js colour args → [r,g,b] 0..255. Gray is 1-arg; RGB 3; CMYK 4.
+  if (c == null) return null;
+  if (typeof c === 'number') { const g = c <= 1 ? c * 255 : c; return [g, g, g]; }
+  if (!c.length) return null;
+  if (c.length === 1) { let g = +c[0]; if (g <= 1) g *= 255; return [g, g, g]; }
+  if (c.length >= 4) {
+    let C = +c[0], M = +c[1], Y = +c[2], K = +c[3];
+    if (C <= 1 && M <= 1 && Y <= 1 && K <= 1) { /* 0..1 */ }
+    else { C /= 255; M /= 255; Y /= 255; K /= 255; }
+    return [255 * (1 - C) * (1 - K), 255 * (1 - M) * (1 - K), 255 * (1 - Y) * (1 - K)];
+  }
+  let r = +c[0], g = +c[1], b = +c[2];
+  if (r <= 1 && g <= 1 && b <= 1) { r *= 255; g *= 255; b *= 255; }
+  return [r, g, b];
+}
+function isMarkupSnapColor(c) {
+  // Magenta/pink revision clouds + saturated red annotations must not be snap targets.
+  // Gray/black/near-neutral plan linework returns false (valid snap).
+  const rgb = pdfColorToRgb(c); if (!rgb) return false;
+  const [r, g, b] = rgb;
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), sat = mx - mn;
+  if (sat < 40) return false; // gray / black / white
+  // Magenta / pink / fuchsia: R+B high, G distinctly lower (Bluebeam/Revu clouds)
+  if (r > 120 && b > 70 && g < 0.75 * Math.min(r, b) && (r + b) * 0.5 - g > 45) return true;
+  // Saturated red text / redlines (keep orange anchors out of this — they use sleeve index)
+  if (r > 160 && g < 100 && b < 100 && r > g + 55 && r > b + 55) return true;
+  return false;
+}
+function isSnapWorthyPlanColor(c) {
+  // Keep gray/black/blue/dim CAD strokes; drop markup colours and near-white paper.
+  if (isMarkupSnapColor(c)) return false;
+  const rgb = pdfColorToRgb(c); if (!rgb) return true;
+  const [r, g, b] = rgb;
+  const lum = 0.3 * r + 0.59 * g + 0.11 * b;
+  if (lum > 215) return false;
+  return true;
+}
+function isPlanDarkPx(r, g, b) {
+  // Raster on-line snap: dark gray/black ink only — ignore magenta clouds & red markup.
+  if (isMarkupSnapColor([r, g, b])) return false;
+  return (r * .3 + g * .59 + b * .11) < 110;
+}
+
 async function fillWallsFromOps(G, d, pg, ops, gen) {
   // Chunked operator walk → segment grid + merged wall index. Safe on phone: yields often,
   // caps segment count, skips hairline noise. gen=0 means synchronous caller owns G.ready.
   // Keep short dimension ticks in the snap grid (min ~0.05). Wall merge filters longer runs later.
+  // Paint-gated + colour-filtered: magenta/pink revision clouds and red annotations are skipped
+  // so Length locks onto gray/black plan linework (including nearest point on a stroke).
   if (!ops || !ops.fnArray || !ops.fnArray.length) {
     installWallIndex(G, [], pg); G.wallsReady = true; return G;
   }
@@ -1155,7 +1238,10 @@ async function fillWallsFromOps(G, d, pg, ops, gen) {
   const MAXS = heavy ? 140000 : 200000;
   const minLen = 0.05;
   const wallMin = heavy ? Math.max(2.0, 0.003 * Math.min(doc.sizes[pg].w, doc.sizes[pg].h)) : 0;
-  let sx = new Float64Array(4 * 4096), n = 0, ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm); const stack = [];
+  let sx = new Float64Array(4 * 4096), n = 0, ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm);
+  let strokeCol = [0, 0, 0], fillCol = [0, 0, 0]; // PDF default black
+  const stack = [];
+  let pending = []; // flat quads awaiting stroke/fill
   const setCtm = m => { ctm = m; M = U.transform(vp.transform, m); };
   const add = (x1, y1, x2, y2) => {
     if (n >= MAXS) return;
@@ -1164,6 +1250,14 @@ async function fillWallsFromOps(G, d, pg, ops, gen) {
     if (4 * n + 4 > sx.length) { const b = new Float64Array(Math.min(4 * MAXS, sx.length * 2)); b.set(sx); sx = b; }
     const o = 4 * n++; sx[o] = x1; sx[o + 1] = y1; sx[o + 2] = x2; sx[o + 3] = y2;
   };
+  const pend = (x1, y1, x2, y2) => { pending.push(x1, y1, x2, y2); };
+  const flushPending = (col) => {
+    if (!pending.length) return;
+    if (!isSnapWorthyPlanColor(col)) { pending = []; return; }
+    for (let i = 0; i < pending.length; i += 4) add(pending[i], pending[i + 1], pending[i + 2], pending[i + 3]);
+    pending = [];
+  };
+  const dropPending = () => { pending = []; };
   const GEOM_CHUNK = isPhoneDev ? (heavy ? 4000 : 8000) : 80000;
   for (let i = 0; i < ops.fnArray.length && n < MAXS; i++) {
     if (i && (i % GEOM_CHUNK) === 0) {
@@ -1172,21 +1266,40 @@ async function fillWallsFromOps(G, d, pg, ops, gen) {
       await new Promise(r => setTimeout(r, 0));
     }
     const fn = ops.fnArray[i], args = ops.argsArray[i];
-    if (fn === OPS.save) stack.push(ctm); else if (fn === OPS.restore) { if (stack.length) setCtm(stack.pop()); }
+    if (fn === OPS.save) stack.push({ ctm, strokeCol, fillCol });
+    else if (fn === OPS.restore) { const s = stack.pop(); if (s) { setCtm(s.ctm); strokeCol = s.strokeCol; fillCol = s.fillCol; } }
     else if (fn === OPS.transform) setCtm(U.transform(ctm, args));
-    else if (fn === OPS.paintFormXObjectBegin) { stack.push(ctm); if (args[0]) setCtm(U.transform(ctm, args[0])); }
-    else if (fn === OPS.paintFormXObjectEnd) { if (stack.length) setCtm(stack.pop()); }
-    else if (fn === OPS.constructPath) { const sub = args[0], co = args[1], [a, b, c, d0, e, f] = M; let j = 0, cur = false, cx = 0, cy = 0, st = false, s0x = 0, s0y = 0;
+    else if (fn === OPS.paintFormXObjectBegin) { stack.push({ ctm, strokeCol, fillCol }); if (args[0]) setCtm(U.transform(ctm, args[0])); }
+    else if (fn === OPS.paintFormXObjectEnd) { const s = stack.pop(); if (s) { setCtm(s.ctm); strokeCol = s.strokeCol; fillCol = s.fillCol; } }
+    else if (fn === OPS.setStrokeRGBColor || fn === OPS.setStrokeGray || fn === OPS.setStrokeCMYKColor) {
+      const rgb = pdfColorToRgb(args); if (rgb) strokeCol = rgb;
+    } else if (fn === OPS.setFillRGBColor || fn === OPS.setFillGray || fn === OPS.setFillCMYKColor) {
+      const rgb = pdfColorToRgb(args); if (rgb) fillCol = rgb;
+    } else if (fn === OPS.constructPath) {
+      dropPending();
+      const sub = args[0], co = args[1], [a, b, c, d0, e, f] = M; let j = 0, cur = false, cx = 0, cy = 0, st = false, s0x = 0, s0y = 0;
       for (const op of sub) {
         if (op === OPS.moveTo) { const x = co[j], y = co[j + 1]; j += 2; cx = s0x = a * x + c * y + e; cy = s0y = b * x + d0 * y + f; cur = st = true; }
         else if (op === OPS.lineTo || op === OPS.curveTo || op === OPS.curveTo2 || op === OPS.curveTo3) {
           const k = op === OPS.lineTo ? 0 : op === OPS.curveTo ? 4 : 2, x = co[j + k], y = co[j + k + 1]; j += k + 2;
-          const nx = a * x + c * y + e, ny = b * x + d0 * y + f; if (cur) add(cx, cy, nx, ny); cx = nx; cy = ny; cur = true; }
+          const nx = a * x + c * y + e, ny = b * x + d0 * y + f; if (cur) pend(cx, cy, nx, ny); cx = nx; cy = ny; cur = true; }
         else if (op === OPS.rectangle) { const x = co[j], y = co[j + 1], w = co[j + 2], h = co[j + 3]; j += 4;
           const X = (u, v) => a * u + c * v + e, Y = (u, v) => b * u + d0 * v + f, x1 = X(x, y), y1 = Y(x, y), x2 = X(x + w, y), y2 = Y(x + w, y), x3 = X(x + w, y + h), y3 = Y(x + w, y + h), x4 = X(x, y + h), y4 = Y(x, y + h);
-          add(x1, y1, x2, y2); add(x2, y2, x3, y3); add(x3, y3, x4, y4); add(x4, y4, x1, y1); cx = s0x = x1; cy = s0y = y1; cur = st = true; }
-        else if (op === OPS.closePath) { if (cur && st) add(cx, cy, s0x, s0y); cur = st; cx = s0x; cy = s0y; }
-      } } }
+          pend(x1, y1, x2, y2); pend(x2, y2, x3, y3); pend(x3, y3, x4, y4); pend(x4, y4, x1, y1); cx = s0x = x1; cy = s0y = y1; cur = st = true; }
+        else if (op === OPS.closePath) { if (cur && st) pend(cx, cy, s0x, s0y); cur = st; cx = s0x; cy = s0y; }
+      }
+    } else if (fn === OPS.stroke || fn === OPS.closeStroke) {
+      flushPending(strokeCol);
+    } else if (fn === OPS.fill || fn === OPS.eoFill) {
+      // Filled shapes: keep only dark/neutral fills (rare thick walls); drop magenta hatch/clouds
+      flushPending(fillCol);
+    } else if (fn === OPS.fillStroke || fn === OPS.eoFillStroke || fn === OPS.closeFillStroke || fn === OPS.closeEOFillStroke) {
+      // Prefer stroke colour for the outline (revision clouds are magenta-stroked)
+      flushPending(isSnapWorthyPlanColor(strokeCol) ? strokeCol : fillCol);
+    } else if (fn === OPS.endPath || fn === OPS.clip || fn === OPS.eoClip) {
+      dropPending(); // clipping paths are not plan linework
+    }
+  }
   if (gen && G._wallGen !== gen) return G;
   if (doc !== d) return G;
   sx = sx.slice(0, 4 * n); G.px = sx;
@@ -1786,6 +1899,7 @@ function findSnap(p, r, exclude, opts) {
   // tick/endpoint still beats a distant intersection (fixes calibrate near-miss).
   // pri: lower is better (legacy). bias adds to distance for scoring.
   const biasOf = (kind, pri) => {
+    if (kind === 'sleeve') return -1.8; // strong magnet, but only inside the tight sleeve radius
     if (kind === 'perp' || kind === 'perp-ext') return -0.5;
     // Tick ends slightly preferred; strong intersections share the top band.
     // Closest among the top band wins (distance-first within tier).
@@ -1805,8 +1919,9 @@ function findSnap(p, r, exclude, opts) {
   };
   opts = opts || {};
   const noSleeve = !!(opts.noSleeve || opts.mode === 'calibrate');
-  // 1) Sleeve / anchor centres — STRICT priority for Length/place, NEVER in Calibrate.
-  // Use opts.sleeveR (capped page-space) when provided so fit-zoom empty taps do not snap.
+  // 1) Sleeve / anchor centres — high priority for Length/place, NEVER in Calibrate.
+  // Tight sleeveR: lock when the aim is on the mark. If a gray plan stroke is clearly
+  // closer than the sleeve, fall through so linework wins (nearby marks must not steal).
   if (!noSleeve && G && G.sleeve) {
     const sr = opts.sleeveR != null ? opts.sleeveR : r;
     const near = nearSleevePts(G, p, sr);
@@ -1816,7 +1931,19 @@ function findSnap(p, r, exclude, opts) {
       const mergeTol = 2.5; let sx = 0, sy = 0, n = 0;
       for (const q of near) if (Math.hypot(q[0] - bq[0], q[1] - bq[1]) <= mergeTol) { sx += q[0]; sy += q[1]; n++; }
       const centre = n >= 2 ? [sx / n, sy / n] : bq;
-      return { p: centre, kind: 'sleeve', pri: -1, d: dist(p, centre) };
+      const sleeveD = dist(p, centre);
+      let lineD = Infinity;
+      if (G.ready && G.segs && G.segs.length) {
+        const ids = nearSegs(G, p, Math.min(r, sleeveD + 1)).slice(0, 120);
+        for (const i of ids) {
+          const s = G.segs[i]; if (!s || s[4]) continue;
+          const d = dist(projSeg(p, s), p); if (d < lineD) lineD = d;
+        }
+      }
+      if (!(lineD + 0.85 < sleeveD)) {
+        return { p: centre, kind: 'sleeve', pri: -1, d: sleeveD };
+      }
+      // Aim is clearly on a nearer plan stroke — do not let the sleeve steal.
     }
   }
   // 2) Perpendicular foot when measuring from a sleeve centre — always lock
@@ -1887,7 +2014,7 @@ function findSnap(p, r, exclude, opts) {
   }
   if (!best && G && G.pix) {
     const { width: W, height: Hh, data } = G.pix, R = Math.ceil(r), x0 = Math.round(p[0]), y0 = Math.round(p[1]); let bd = 1e9, bq = null;
-    const dark = (x, y) => x >= 0 && y >= 0 && x < W && y < Hh && (data[(y * W + x) * 4] * .3 + data[(y * W + x) * 4 + 1] * .59 + data[(y * W + x) * 4 + 2] * .11) < 110;
+    const dark = (x, y) => { if (x < 0 || y < 0 || x >= W || y >= Hh) return false; const i = (y * W + x) * 4; return isPlanDarkPx(data[i], data[i + 1], data[i + 2]); };
     for (let y = y0 - R; y <= y0 + R; y++) for (let x = x0 - R; x <= x0 + R; x++) if (dark(x, y)) { const d = (x - p[0]) ** 2 + (y - p[1]) ** 2; if (d < bd) { bd = d; bq = [x, y]; } }
     if (bq && Math.sqrt(bd) <= r) {
       const run = (dx, dy) => { let a = 0, b = 0; while (a < 12 && dark(bq[0] - dx * (a + 1), bq[1] - dy * (a + 1))) a++; while (b < 12 && dark(bq[0] + dx * (b + 1), bq[1] + dy * (b + 1))) b++; return [a, b]; };
@@ -1899,11 +2026,11 @@ function findSnap(p, r, exclude, opts) {
   return best;
 }
 function sleeveSnapRadius(touchR) {
-  // Cap page-space radius so empty taps at fit zoom do not pull to a distant sleeve,
-  // while keeping a generous CSS hit target when actually near one (and when zoomed in).
-  const rCss = touchR ? 30 : 14;
+  // Tight capture: sleeves still win when the finger is on them, but a nearby mark
+  // must not steal an aim that is clearly on a gray plan line (compete with geom radius).
+  const rCss = touchR ? 18 : 10;
   const r = rCss / zoom;
-  const cap = touchR ? 26 : 14; // page units — ~avg NN spacing on dense sheets is ~4
+  const cap = touchR ? 8 : 5; // page units — matches geomSnapRadius caps
   return Math.min(r, cap);
 }
 function aim(p, e, prev, exclude) {
@@ -2000,7 +2127,7 @@ $('#toWallBtn').onclick = () => applyToWall(null);
 const _draw3 = draw; draw = function () { _draw3(); if (snapHit && (PLACE.includes(tool) || ['count', 'sleeve', 'origin'].includes(tool) || gesture)) showSnapMark(); };
 const _loadDoc = loadDoc; loadDoc = async function (...a) { for (const k in geomCache) delete geomCache[k]; clearPageBaseCache(); const r = await _loadDoc(...a); return r; };
 vpEl.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !gesture) { snapHit = null; showSnapMark(); } });
-window.PMsnap = { buildGeom: pg => buildGeom(pg), ensureSleeveSnap: pg => ensureSleeveSnap(pg), findSnap, nearestPerpWall, isSleeveCentrePt, applyToWall, mergeCollinearSegs, geomSnapRadius, sleeveSnapRadius, get hit() { return snapHit; }, get wallExt() { return wallExt; }, geom: geomCache };
+window.PMsnap = { buildGeom: pg => buildGeom(pg), ensureSleeveSnap: pg => ensureSleeveSnap(pg), findSnap, nearestPerpWall, isSleeveCentrePt, applyToWall, mergeCollinearSegs, geomSnapRadius, sleeveSnapRadius, isMarkupSnapColor, isSnapWorthyPlanColor, get hit() { return snapHit; }, get wallExt() { return wallExt; }, geom: geomCache };
 // Snap geometry is built when something uses it: CAD drawings, a page with sleeves, or a measuring tool in hand.
 // Building it on every open made heavy PDFs slower to open and is wasted when you only look at the plan.
 const snapTool = t => PLACE.includes(t) || ['count', 'sleeve', 'origin'].includes(t);
