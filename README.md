@@ -96,7 +96,8 @@ python3 -m http.server 8766 &
 python3 test/e2e.py                                  # starts its own server
 python3 test/make_find_dxf.py   # sample DXF with sleeve blocks, circles and decoys
 python3 test/make_revit_dxf.py  # synthetic Revit-style export (far-from-origin link blocks, mirrored families, stray entity, missing xref)
-for t in phone loupe undo snap cad find revit count webkit pmproj heights delete straight; do python3 test/$t.py http://127.0.0.1:8766/; done
+for t in phone loupe undo snap cad find revit count webkit pmproj heights delete straight sleeve_snap markup_snap loupe_ios menu_print print_zoom_init rules; do python3 test/$t.py http://127.0.0.1:8766/; done
+python3 test/make_site.py test/sample-site.pdf test/sample-site.json   # synthetic sleeving sheet used by test/rules.py
 ```
 
 The tests launch Chrome from `/usr/bin/google-chrome`; change `executable_path` in the scripts if yours is elsewhere. The DWG checks in `test/cad.py` expect sample files from the LibreDWG test data (`example_2018.dwg`, `example_r14.dwg`) in `/tmp` as `ex_2018.dwg` and `ex_r14.dwg`.

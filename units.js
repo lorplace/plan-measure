@@ -3,8 +3,22 @@
 const IN=0.0254, FT=0.3048;
 function frac(s){s=s.trim();if(!s)return 0;let t=0;for(const p of s.split(/[\s-]+/)){if(!p)continue;if(p.includes('/')){const[a,b]=p.split('/');t+=parseFloat(a)/parseFloat(b);}else t+=parseFloat(p);}return t;}
 // Parse "12'6\"", "12' 6 1/2\"", "12'-6", "20ft", "3.5m", "3500mm", "35cm", "18in". Returns metres or NaN.
+// A typed metric number as a plain number string, or null when it cannot be read with certainty.
+// "5 000" and "5,000" (mm) are five thousand, "12,5" is twelve and a half, "1,250.5" is 1250.5.
+// In metres a single comma stays a decimal comma ("64,650" = 64.650 m). Anything else, e.g. "1.250.5", is refused
+// instead of being cut short: a scale set from a misread number is wrong by a factor of 1000 with no warning.
+function metricNum(t, mm){
+  t=t.replace(/[\s\u00a0\u202f]/g,'');
+  if(/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(t) && (mm || t.includes('.') || t.split(',').length>2)) return t.replace(/,/g,'');
+  if(/^\d+(,\d+)?$/.test(t)) return t.replace(',','.');
+  if(/^(\d+\.?\d*|\.\d+)$/.test(t)) return t;
+  return null;
+}
 function parseLength(str, defUnit){
-  let s=String(str).trim().toLowerCase().replace(/[’′]/g,"'").replace(/[”″]/g,'"').replace(/,/g,'.');
+  const raw=String(str).trim().toLowerCase();
+  const mt=raw.match(/^([\d.,\s\u00a0\u202f]+?)\s*(mm|cm|m)?$/);
+  if(mt && (mt[2] || defUnit==='mm' || defUnit==='met')){ const unit=mt[2]||(defUnit==='mm'?'mm':'m'), n=metricNum(mt[1], unit==='mm'); return n==null?NaN:parseFloat(n)*{mm:.001,cm:.01,m:1}[unit]; }
+  let s=raw.replace(/[’′]/g,"'").replace(/[”″]/g,'"').replace(/,/g,'.');
   if(!s) return NaN;
   let m;
   if((m=s.match(/^([\d.]+)\s*(mm|cm|m)$/))){return parseFloat(m[1])*{mm:.001,cm:.01,m:1}[m[2]];}
