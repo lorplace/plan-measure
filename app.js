@@ -266,32 +266,36 @@ function placeCanvas() { if (!doc || !doc.sizes[page]) return; const { w, h } = 
   canvas.style.left = g.x0 * zoom + 'px'; canvas.style.top = g.y0 * zoom + 'px'; canvas.style.width = g.w * zoom + 'px'; canvas.style.height = g.h * zoom + 'px'; }
 function cancelJob(j) { if (!j) return; j.dead = true; if (j.task) { try { j.task.cancel(); } catch (e) { } j.task = null; } }
 function dropRenders() { cancelJob(baseJob); cancelJob(detailJob); baseJob = detailJob = null; base._key = canvas._key = ''; base._ok = canvas._on = false; canvas._reg = null; canvas.width = canvas.height = base.width = base.height = back.width = back.height = 0; }
-function canvasLooksPainted(c) {
-  // Safari can "succeed" a render then leave a zeroed/transparent buffer under memory pressure.
-  // A white pre-fill alone must NOT count — require some non-white ink (plan lines).
+// What a plan bitmap holds: 'ink' (plan lines), 'white' (only the white pre-fill) or 'void' (zeroed: Safari dropped it).
+// Safari can "succeed" a render then leave a zeroed buffer under memory pressure, so a white pre-fill alone is not proof.
+// The old check looked at two 64 px squares (top-left corner and exact centre). A sheet that is blank paper at both, e.g.
+// one with no border, was judged blank four times in a row and its page bitmap ended up about 175 px wide.
+// This one also reads thin strips across the whole bitmap, so any long line on the sheet is seen.
+function canvasInk(c) {
   try {
-    if (!c || !c.width || !c.height) return false;
-    const ctx = c.getContext('2d'); if (!ctx) return false;
+    if (!c || !c.width || !c.height) return 'void';
+    const ctx = c.getContext('2d'); if (!ctx) return 'void';
+    let ink = 0, lit = 0;
     const sample = (x, y, tw, th) => {
       const d = ctx.getImageData(x, y, tw, th).data;
-      let ink = 0, lit = 0;
       for (let i = 0; i < d.length; i += 4) {
         const s = d[i] + d[i + 1] + d[i + 2];
         if (s < 20) continue; // transparent/black void
         if (s < 720) ink++; // not near-white
         else lit++;
       }
-      return { ink, lit };
     };
-    const a = sample(0, 0, Math.min(c.width, 64), Math.min(c.height, 64));
-    if (a.ink >= 8) return true;
-    const cx = Math.max(0, Math.floor(c.width / 2) - 32), cy = Math.max(0, Math.floor(c.height / 2) - 32);
-    const b = sample(cx, cy, Math.min(64, c.width - cx), Math.min(64, c.height - cy));
-    if (b.ink >= 8) return true;
-    // Cad-ish near-empty corner: accept any non-zero variance with some lit pixels from pdf white bg + lines
-    return (a.ink + b.ink) >= 3;
-  } catch (e) { return false; }
+    const W = c.width, H = c.height;
+    sample(0, 0, Math.min(W, 64), Math.min(H, 64));
+    if (ink >= 8) return 'ink';
+    const cx = Math.max(0, Math.floor(W / 2) - 32), cy = Math.max(0, Math.floor(H / 2) - 32);
+    sample(cx, cy, Math.min(64, W - cx), Math.min(64, H - cy));
+    if (ink >= 8) return 'ink';
+    for (let k = 1; k <= 7 && ink < 8; k++) { sample(0, Math.min(H - 1, Math.floor(H * k / 8)), W, 1); sample(Math.min(W - 1, Math.floor(W * k / 8)), 0, 1, H); }
+    return ink >= 3 ? 'ink' : lit > 0 ? 'white' : 'void';
+  } catch (e) { return 'void'; }
 }
+function canvasLooksPainted(c) { return canvasInk(c) === 'ink'; }
 function allocCanvasSize(c, cw, ch) {
   // Setting an over-limit size on iOS yields a blank/zero canvas — refuse and let caller shrink.
   if (cw > CANVAS_MAX_DIM || ch > CANVAS_MAX_DIM || cw * ch > CANVAS_MAX_AREA) return false;
@@ -349,7 +353,10 @@ function renderBase(key) {
         r *= 0.55; continue;
       }
       if (job.dead || viewKey() !== key) return false;
-      if (!canvasLooksPainted(base)) { console.warn('renderBase blank buffer', cw, 'x', ch); r *= 0.55; continue; }
+      // A zeroed buffer is retried smaller. An all-white one is retried once only: if it is white again the sheet really
+      // is (nearly) blank there, and shrinking it further would only throw resolution away.
+      const inkState = canvasInk(base);
+      if (inkState === 'void' || (inkState === 'white' && !job.whiteSeen)) { console.warn('renderBase blank buffer', inkState, cw, 'x', ch); if (inkState === 'white') { job.whiteSeen = true; r *= 0.8; } else r *= 0.55; continue; }
       base._ok = true; placeCanvas();
       if (baseJob === job) baseJob = null;
       // Keep a copy so flipping back to this page is instant
@@ -432,14 +439,27 @@ function drawItem(it, g, isDraft) {
   }
   if (sel) it.pts.forEach((p, i) => el('rect', { x: p[0] - 6 / zoom, y: p[1] - 6 / zoom, width: 12 / zoom, height: 12 / zoom, fill: '#fff', stroke: '#1d5fb4', 'stroke-width': 2 / zoom, 'data-v': i, class: 'handle' }, grp));
 }
+// While a finger drags a point, the placed items cannot change, so their SVG is built once per drag and reused; only the
+// draft line, the snap targets and the lens are redrawn per move, and the side list is left alone until the finger lifts.
+// Rebuilding everything per move cost about 430 ms a move with 1,000 placed sleeves on a phone-class CPU.
+let liveG = null, liveFor = null, sleeveNo = null;
 function draw() {
-  svg.innerHTML = ''; if (!proj) return;
+  if (!proj) { svg.innerHTML = ''; liveG = liveFor = null; return; }
+  const hot = !!(gesture && (gesture.kind === 'place' || gesture.kind === 'dpt'));
+  const reuse = hot && liveG && liveFor === gesture;
+  if (reuse) { for (const c of [...svg.children]) if (c !== liveG) c.remove(); } // placed items stay in the page untouched
+  else {
+    svg.innerHTML = '';
+    const gi = el('g', {}, svg);
+    sleeveNo = new Map(); { let n = 0; for (const o of proj.items) if (o.type === 'sleeve') sleeveNo.set(o, ++n); }
+    try { proj.items.filter(i => i.page === page).forEach(i => drawItem(i, gi)); } finally { if (hot) { /* keep for renderList below */ } }
+    liveG = hot ? gi : null; liveFor = hot ? gesture : null;
+  }
   const g = el('g', {}, svg);
-  proj.items.filter(i => i.page === page).forEach(i => drawItem(i, g));
   drawSleeveTargets(g);
   if (draft) { const full = draft.type === 'calibrate' && draft.pts.length === 2; const pts = hover && !full ? draft.pts.concat([hover]) : draft.pts; if (pts.length) { const ext = wallExt ? [wallExt.a, wallExt.b] : draft.ext; drawItem({ ...draft, pts, page, label: draft.label, ext }, g, true); }
     const q = draft.pts[calSel]; if (q) el('circle', { cx: q[0], cy: q[1], r: 7 / zoom, fill: 'none', stroke: '#ffb300', 'stroke-width': 2.5 / zoom }, g); }
-  renderList();
+  try { if (!reuse) renderList(); } finally { sleeveNo = null; }
 }
 function drawSleeveTargets(g) {
   // Viewport-only centre dots (hide when zoomed far out) so 1000+ anchors stay smooth on phone
@@ -960,8 +980,13 @@ function showLoupe(p, e) {
   const aim = touch ? aimScreenPt(e, !!lifting) : { x: e.clientX, y: e.clientY, fingerY: e.clientY, lift: false };
   // Loupe sits above the aim (or finger); when lifting, stay clear of the fingertip
   let x = touch ? aim.x - LSZ / 2 : e.clientX + 24, y = touch ? aim.y - LSZ - (aim.lift ? 16 : 60) : e.clientY - LSZ - 24;
-  if (y < 4) y = Math.min(innerHeight - LSZ - 4, (touch ? aim.fingerY : e.clientY) + 24);
-  if (touch && aim.lift && y + LSZ > aim.fingerY - 8) y = Math.max(4, aim.fingerY - LSZ - 12);
+  if (touch && y < 4) {
+    // No room above (target near the top of the screen). Below would put the lens under the hand, and pinning it to the
+    // top edge put it under the fingertip. Go beside the finger instead, on the side with more room.
+    const side = aim.x > innerWidth / 2 ? -1 : 1, gap = 44;
+    x = side > 0 ? aim.x + gap : aim.x - gap - LSZ;
+    y = Math.max(4, Math.min(innerHeight - LSZ - 4, aim.y - LSZ / 2));
+  } else if (y < 4) y = Math.min(innerHeight - LSZ - 4, e.clientY + 24);
   x = Math.max(4, Math.min(innerWidth - LSZ - 4, x));
   if (!touch && x < e.clientX && x + LSZ > e.clientX && y < e.clientY && y + LSZ > e.clientY) x = e.clientX - LSZ - 24;
   lc.style.left = x + 'px'; lc.style.top = y + 'px'; lc.style.display = 'block';
@@ -976,6 +1001,9 @@ function showLoupe(p, e) {
   if (canvas._on && canvas._key === key && canvas._reg && canvas.width) blitPlan(ctx, canvas, canvas._reg, canvas.width / canvas._reg.w, p[0] - half, p[1] - half, 2 * half, L);
   loupeOverlay(ctx, p, S, L);
   // the sharp version waits until the finger rests: on a heavy plan each one redraws the whole page
+  // A sharp render still running for an older spot is stopped: on a heavy sheet each one walks the whole page, and
+  // letting it finish made the sharp lens trail the finger by one full render.
+  if (loupeTask && loupeWant && (loupeWant.p[0] !== p[0] || loupeWant.p[1] !== p[1] || loupeWant.S !== S)) { try { loupeTask.cancel(); } catch (err) { } loupeTask = null; }
   loupeWant = { p: p.slice(), S, L, pg: page }; lc.dataset.sharp = ''; clearTimeout(sharpLoupe.t); sharpLoupe.t = setTimeout(sharpLoupe, 120);
 }
 // One small fixed buffer for the sharp render, made at start-up (before the plan bitmaps take the canvas budget) and never
@@ -998,7 +1026,8 @@ async function sharpLoupe() {
     const h = w.L / 2 / w.S, reg = { x0: w.p[0] - h, y0: w.p[1] - h, w: 2 * h, h: 2 * h };
     if (doc.type === 'pdf') { const pg = await doc.pdf.getPage(w.pg);
       // same call shape as the plan render (scale + translate): only the lens area lands in the buffer
-      await pg.render({ canvasContext: oc, viewport: pg.getViewport({ scale: w.S }), transform: [1, 0, 0, 1, -reg.x0 * w.S, -reg.y0 * w.S] }).promise; }
+      const task = pg.render({ canvasContext: oc, viewport: pg.getViewport({ scale: w.S }), transform: [1, 0, 0, 1, -reg.x0 * w.S, -reg.y0 * w.S] });
+      loupeTask = task; try { await task.promise; } finally { if (loupeTask === task) loupeTask = null; } }
     else if (doc.type === 'cad') { CAD.draw(oc, doc.cad, w.S, -reg.x0 * w.S, -reg.y0 * w.S, proj.hidden || {}, reg); }
     else { oc.imageSmoothingEnabled = false; blitPlan(oc, doc.img, { x0: 0, y0: 0 }, 1, reg.x0, reg.y0, reg.w, w.L); }
     if (loupeWant && lc.style.display !== 'none' && loupeWant.pg === w.pg) { const cur = loupeWant, ctx = lc.getContext('2d');
@@ -1006,7 +1035,7 @@ async function sharpLoupe() {
         // Only replace the preview with real ink: a blank result keeps the (softer) preview rather than a white lens.
         if (hasInk(off, oc)) { ctx.drawImage(off, 0, 0); loupeOverlay(ctx, w.p, w.S, w.L); lc.dataset.sharp = '1'; }
         else lc.dataset.sharp = '0'; } }
-  } catch (err) { if (loupeWant) lc.dataset.sharp = '0'; console.warn('sharpLoupe', err && err.message || err); }
+  } catch (err) { if (err && err.name === 'RenderingCancelledException') { /* the finger moved on */ } else { if (loupeWant) lc.dataset.sharp = '0'; console.warn('sharpLoupe', err && err.message || err); } }
   loupeBusy = false; if (loupeWant && (loupeWant.p[0] !== w.p[0] || loupeWant.p[1] !== w.p[1] || loupeWant.S !== w.S)) { lc.dataset.sharp = ''; clearTimeout(sharpLoupe.t); sharpLoupe.t = setTimeout(sharpLoupe, 120); }
 }
 function loupeOverlay(ctx, p, S, L) {
@@ -1093,9 +1122,12 @@ function extractAxisSegs(pix) {
 }
 function mergeCollinearSegs(segs, gapTol, axisTol) {
   // Merge nearly-collinear axis-aligned pieces across gaps into longer virtual walls.
-  const H = [], V = [];
+  // Only true horizontals and verticals are merged. Anything at an angle (an angled wall, a leader) is passed through as
+  // drawn: flattening it to its average height made a phantom wall where nothing is drawn.
+  const H = [], V = [], rest = [];
   for (const s of segs) {
     const dx = Math.abs(s[2] - s[0]), dy = Math.abs(s[3] - s[1]);
+    if (Math.min(dx, dy) > Math.max(0.5, 0.01 * Math.hypot(dx, dy))) { rest.push(s.slice(0, 4)); continue; }
     if (dx >= dy) H.push([Math.min(s[0], s[2]), (s[1] + s[3]) / 2, Math.max(s[0], s[2]), (s[1] + s[3]) / 2]);
     else V.push([(s[0] + s[2]) / 2, Math.min(s[1], s[3]), (s[0] + s[2]) / 2, Math.max(s[1], s[3])]);
   }
@@ -1117,12 +1149,16 @@ function mergeCollinearSegs(segs, gapTol, axisTol) {
     }
     return out;
   };
-  return merge(H, true).concat(merge(V, false));
+  return merge(H, true).concat(merge(V, false), rest);
 }
 function installWallIndex(G, segs, pg) {
   pg = pg != null ? pg : ((G && G._pg) || page);
   const sz = doc.sizes[pg] || doc.sizes[page];
-  const merged = mergeCollinearSegs(segs.map(s => s.slice(0, 4)), Math.max(28, 0.03 * Math.min(sz.w, sz.h)), Math.max(3, 0.003 * Math.min(sz.w, sz.h)));
+  // Vector plans: two lines count as the same wall line only when they sit on it (0.75 units). The old 3 to 5 unit band
+  // averaged the two faces of a double-line wall into one line between them, so "to wall" read to the middle of the wall.
+  // Scanned images keep the wider band: their line positions wobble by a pixel or two.
+  const band = doc.type === 'image' ? Math.max(3, 0.003 * Math.min(sz.w, sz.h)) : 0.75;
+  const merged = mergeCollinearSegs(segs.map(s => s.slice(0, 4)), Math.max(28, 0.03 * Math.min(sz.w, sz.h)), band);
   G.wallPx = new Float64Array(merged.length * 4); G.wallN = merged.length; G.wallGrid = new Map();
   for (let i = 0; i < merged.length; i++) { const o = 4 * i, s = merged[i]; G.wallPx[o] = s[0]; G.wallPx[o + 1] = s[1]; G.wallPx[o + 2] = s[2]; G.wallPx[o + 3] = s[3]; gridAdd(G.wallGrid, i, s[0], s[1], s[2], s[3]); }
   G.wallsReady = true;
@@ -1238,23 +1274,34 @@ async function fillWallsFromOps(G, d, pg, ops, gen) {
   const MAXS = heavy ? 140000 : 200000;
   const minLen = 0.05;
   const wallMin = heavy ? Math.max(2.0, 0.003 * Math.min(doc.sizes[pg].w, doc.sizes[pg].h)) : 0;
-  let sx = new Float64Array(4 * 4096), n = 0, ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm);
+  let sx = new Float64Array(4 * 4096), sf = new Uint8Array(4096), n = 0, ctm = [1, 0, 0, 1, 0, 0], M = U.transform(vp.transform, ctm);
+  // Small filled shapes are arrowheads, dots and the sleeve marks themselves, not plan lines. They are kept (Set scale may
+  // want an arrow tip) but tagged, so measuring and placing never lock onto them.
+  const decoMax = Math.max(6, 0.006 * Math.min(doc.sizes[pg].w, doc.sizes[pg].h));
+  let capped = false;
   let strokeCol = [0, 0, 0], fillCol = [0, 0, 0]; // PDF default black
   const stack = [];
   let pending = []; // flat quads awaiting stroke/fill
   const setCtm = m => { ctm = m; M = U.transform(vp.transform, m); };
-  const add = (x1, y1, x2, y2) => {
-    if (n >= MAXS) return;
+  const add = (x1, y1, x2, y2, deco) => {
+    if (n >= MAXS) { capped = true; return; }
     const L = Math.hypot(x2 - x1, y2 - y1);
     if (L <= minLen) return;
-    if (4 * n + 4 > sx.length) { const b = new Float64Array(Math.min(4 * MAXS, sx.length * 2)); b.set(sx); sx = b; }
+    if (4 * n + 4 > sx.length) { const b = new Float64Array(Math.min(4 * MAXS, sx.length * 2)); b.set(sx); sx = b; const f = new Uint8Array(b.length / 4); f.set(sf); sf = f; }
+    sf[n] = deco ? 1 : 0;
     const o = 4 * n++; sx[o] = x1; sx[o + 1] = y1; sx[o + 2] = x2; sx[o + 3] = y2;
   };
   const pend = (x1, y1, x2, y2) => { pending.push(x1, y1, x2, y2); };
-  const flushPending = (col) => {
+  const flushPending = (col, filled) => {
     if (!pending.length) return;
     if (!isSnapWorthyPlanColor(col)) { pending = []; return; }
-    for (let i = 0; i < pending.length; i += 4) add(pending[i], pending[i + 1], pending[i + 2], pending[i + 3]);
+    let deco = false;
+    if (filled && pending.length <= 4 * 40) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let i = 0; i < pending.length; i += 2) { const x = pending[i], y = pending[i + 1]; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+      deco = Math.hypot(x1 - x0, y1 - y0) <= decoMax;
+    }
+    for (let i = 0; i < pending.length; i += 4) add(pending[i], pending[i + 1], pending[i + 2], pending[i + 3], deco);
     pending = [];
   };
   const dropPending = () => { pending = []; };
@@ -1292,24 +1339,25 @@ async function fillWallsFromOps(G, d, pg, ops, gen) {
       flushPending(strokeCol);
     } else if (fn === OPS.fill || fn === OPS.eoFill) {
       // Filled shapes: keep only dark/neutral fills (rare thick walls); drop magenta hatch/clouds
-      flushPending(fillCol);
+      flushPending(fillCol, true);
     } else if (fn === OPS.fillStroke || fn === OPS.eoFillStroke || fn === OPS.closeFillStroke || fn === OPS.closeEOFillStroke) {
       // Prefer stroke colour for the outline (revision clouds are magenta-stroked)
-      flushPending(isSnapWorthyPlanColor(strokeCol) ? strokeCol : fillCol);
+      flushPending(isSnapWorthyPlanColor(strokeCol) ? strokeCol : fillCol, true);
     } else if (fn === OPS.endPath || fn === OPS.clip || fn === OPS.eoClip) {
       dropPending(); // clipping paths are not plan linework
     }
   }
   if (gen && G._wallGen !== gen) return G;
   if (doc !== d) return G;
-  sx = sx.slice(0, 4 * n); G.px = sx;
-  G.segs = new Proxy({ length: n }, { get: (o, k) => k === 'length' ? n : (typeof k === 'string' && /^\d+$/.test(k)) ? [sx[4 * k], sx[4 * k + 1], sx[4 * k + 2], sx[4 * k + 3]] : undefined });
+  sx = sx.slice(0, 4 * n); sf = sf.slice(0, n); G.px = sx; G.deco = sf; G.capped = capped;
+  // [x1, y1, x2, y2, hidden (CAD only), layer (CAD only), small filled shape]
+  G.segs = new Proxy({ length: n }, { get: (o, k) => k === 'length' ? n : (typeof k === 'string' && /^\d+$/.test(k)) ? [sx[4 * k], sx[4 * k + 1], sx[4 * k + 2], sx[4 * k + 3], 0, undefined, sf[k]] : undefined });
   G.grid = new Map();
   for (let i = 0; i < n; i++) gridAdd(G.grid, i, sx[4 * i], sx[4 * i + 1], sx[4 * i + 2], sx[4 * i + 3]);
   const raw = [];
   for (let i = 0; i < n; i++) {
     const x1 = sx[4 * i], y1 = sx[4 * i + 1], x2 = sx[4 * i + 2], y2 = sx[4 * i + 3];
-    if (wallMin && Math.hypot(x2 - x1, y2 - y1) < wallMin) continue;
+    if (sf[i] || (wallMin && Math.hypot(x2 - x1, y2 - y1) < wallMin)) continue;
     raw.push([x1, y1, x2, y2]);
   }
   installWallIndex(G, raw, pg);
@@ -1850,167 +1898,149 @@ function wallSegAt(G, i) {
   return G.segs[i];
 }
 function nearestPerpWall(from, toward, searchR) {
-  // Closest wall by perpendicular distance from `from`. If `toward` is set, only consider
-  // feet in that half-plane (direction of the finger) so the user can choose which wall.
-  // Segment is treated as an infinite line: if the foot falls past an end (or in a dash gap
-  // of a merged wall), we still return the foot and a faint extension.
+  // Nearest wall, measured square to it, from `from`. If `toward` is set, only walls on that side count (the finger chooses).
+  // A wall that stops short is continued as a faint virtual line, but only a little way: without that limit a wall on the far
+  // side of the building whose line happens to pass close by would beat the wall right beside the sleeve.
+  // The search grows outward ring by ring, so the nearest wall is found first and a big sheet is never scanned whole.
   const G = geomCache[page]; if (!G || !G.ready) return null;
   const hasWall = (G.wallN && G.wallN > 0) || (G.segs && G.segs.length); if (!hasWall) return null;
-  const R = searchR != null ? searchR : Math.max(doc.sizes[page].w, doc.sizes[page].h);
-  // Always gather candidates around the sleeve first; also around the finger for far walls
-  const ids = nearWallIds(G, from, R).slice(0, 800);
-  if (toward) for (const i of nearWallIds(G, toward, R).slice(0, 400)) if (!ids.includes(i)) ids.push(i);
-  const minL = Math.min(minWallLen(), 0.006 * Math.min(doc.sizes[page].w, doc.sizes[page].h));
+  const { w: PW, h: PH } = doc.sizes[page], pageMin = Math.min(PW, PH);
+  const Rmax = Math.min(searchR != null ? searchR : Infinity, Math.hypot(PW, PH));
+  // A wall at an angle must be long to count: short angled lines are leaders, not walls.
+  const minL = Math.min(minWallLen(), 0.006 * pageMin), minOblique = 0.04 * pageMin;
   const dir = toward ? [toward[0] - from[0], toward[1] - from[1]] : null;
   const dirL = dir ? Math.hypot(dir[0], dir[1]) : 0;
-  let best = null, bestAny = null;
-  for (const i of ids) {
-    const s = wallSegAt(G, i); if (!s || s[4]) continue;
-    const len = Math.hypot(s[2] - s[0], s[3] - s[1]); if (len < minL) continue;
-    const hit = infinitePerp(from, s); const dLen = dist(from, hit.foot); if (dLen < 1e-6) continue;
-    // Prefer walls in the finger's direction cone (~70°): foot must lie mostly along toward
-    let along = dLen;
-    if (dirL > 1e-6) {
-      along = ((hit.foot[0] - from[0]) * dir[0] + (hit.foot[1] - from[1]) * dir[1]) / dirL;
-      const cand = { foot: hit.foot, onSeg: hit.onSeg, t: hit.t, seg: s.slice(0, 4), dLen, along, ext: hit.onSeg ? null : wallExtPts(s, hit.t) };
-      if (!bestAny || dLen < bestAny.dLen) bestAny = cand;
-      // Skip walls whose foot is sideways/backwards relative to the finger
-      if (along < dLen * 0.35) continue;
-      if (!best || dLen < best.dLen - 1e-6 || (Math.abs(dLen - best.dLen) < 1e-6 && along > best.along)) best = cand;
-      continue;
+  const reach = dLen => Math.max(2 * dLen, 0.03 * pageMin); // how far past its end a wall may be continued
+  let best = null, bestAny = null; const seen = new Set();
+  for (let R = Math.min(Rmax, 4 * CELL); ; R = Math.min(Rmax, R * 2)) {
+    for (const i of nearWallIds(G, from, R)) {
+      if (seen.has(i)) continue; seen.add(i);
+      const s = wallSegAt(G, i); if (!s || s[4]) continue;
+      const len = Math.hypot(s[2] - s[0], s[3] - s[1]); if (len < minL) continue;
+      if (len < minOblique && Math.min(Math.abs(s[2] - s[0]), Math.abs(s[3] - s[1])) > Math.max(0.5, 0.01 * len)) continue;
+      const hit = infinitePerp(from, s); const dLen = dist(from, hit.foot); if (dLen < 1e-6) continue;
+      const gap = hit.onSeg ? 0 : (hit.t < 0 ? -hit.t : hit.t - 1) * len;
+      if (gap > reach(dLen)) continue;
+      const along = dirL > 1e-6 ? ((hit.foot[0] - from[0]) * dir[0] + (hit.foot[1] - from[1]) * dir[1]) / dirL : dLen;
+      const cand = { foot: hit.foot, onSeg: hit.onSeg, t: hit.t, seg: s.slice(0, 4), dLen, along, cost: dLen + 0.5 * gap, ext: hit.onSeg ? null : wallExtPts(s, hit.t) };
+      if (!bestAny || cand.cost < bestAny.cost) bestAny = cand;
+      if (dirL > 1e-6 && along < dLen * 0.35) continue; // sideways or behind the finger
+      if (!best || cand.cost < best.cost - 1e-6 || (Math.abs(cand.cost - best.cost) < 1e-6 && along > best.along)) best = cand;
     }
-    const cand = { foot: hit.foot, onSeg: hit.onSeg, t: hit.t, seg: s.slice(0, 4), dLen, along, ext: hit.onSeg ? null : wallExtPts(s, hit.t) };
-    if (!best || dLen < best.dLen - 1e-6) best = cand;
-    if (!bestAny || dLen < bestAny.dLen) bestAny = cand;
+    // nothing further out can beat a wall already this close
+    if (best && best.cost * 1.5 <= R) break;
+    if (R >= Rmax) break;
   }
   return best || bestAny;
 }
 let wallExt = null; // { a:[x,y], b:[x,y] } fictional wall continuation while aiming / on item
+// Upper bound of the catch radius in page units. It only keeps a far zoomed-out view from searching a large part of the
+// sheet on every finger move (about 14 x 14 grid cells at most); it is not what decides the winner.
+const SNAP_CAP = 7 * CELL;
 function geomSnapRadius(touchR) {
-  // Sensible at all zooms: ~22–26 CSS px, hard-capped in page space so dense CAD
-  // nearby ticks/ends do not steal a tap meant for the nearest dimension mark.
-  const rCss = touchR ? 24 : 12;
-  const cap = touchR ? 8 : 6;
-  return Math.min(rCss / zoom, cap);
+  // The catch radius is a fingertip on screen (24 CSS px touch, 12 mouse) at every zoom. The old cap of 8 page units left
+  // under 6 px at 100% and about 1 px at phone fit zoom, so a near miss landed beside the tick or the line end.
+  // Which candidate wins is decided in findSnap, nearest first.
+  return Math.min((touchR ? 24 : 12) / zoom, SNAP_CAP);
+}
+// Segments with a point within r of p, nearest first, so a cap on the count can never drop the closest ones.
+function snapSegs(G, p, r, cap) {
+  const out = [];
+  for (const i of nearSegs(G, p, r)) { const s = G.segs[i]; if (!s || s[4]) continue; const f = projSeg(p, s), d = Math.hypot(f[0] - p[0], f[1] - p[1]); if (d <= r) out.push({ s, f, d, len: Math.hypot(s[2] - s[0], s[3] - s[1]) }); }
+  out.sort((a, b) => a.d - b.d); if (out.length > cap) out.length = cap; return out;
 }
 function findSnap(p, r, exclude, opts) {
-  const G = geomCache[page]; let best = null;
-  // Distance-weighted score: higher-priority kinds get a small bonus, but a nearby
-  // tick/endpoint still beats a distant intersection (fixes calibrate near-miss).
-  // pri: lower is better (legacy). bias adds to distance for scoring.
-  const biasOf = (kind, pri) => {
-    if (kind === 'sleeve') return -1.8; // strong magnet, but only inside the tight sleeve radius
-    if (kind === 'perp' || kind === 'perp-ext') return -0.5;
-    // Tick ends slightly preferred; strong intersections share the top band.
-    // Closest among the top band wins (distance-first within tier).
-    if (kind === 'x') return pri < 0 ? 0.15 : 2.8; // oblique demoted
-    if (kind === 'end' && pri < 0) return -0.35; // short tick end slight magnet
-    if (kind === 'end' || kind === 'mid' || kind === 'center') return 2.2;
-    if (kind === 'line') return 3.6;
-    return 2.4;
-  };
-  const consider = (q, kind, pri) => {
+  const G = geomCache[page]; let best = null; opts = opts || {};
+  const cal = opts.mode === 'calibrate', noSleeve = !!(opts.noSleeve || cal), z = zoom || 1;
+  const tickMax = Math.max(8, 0.012 * Math.min(doc.sizes[page].w, doc.sizes[page].h));
+  // Score = distance on screen (CSS px) + a handicap per kind. The handicaps are in pixels, so the behaviour is the same at
+  // every zoom: the nearest candidate wins unless a better kind is only a few pixels further away.
+  //   Set scale: tick crossings and tick ends first, then line ends, and a point along a line only as a last resort.
+  //   Measure / place: the same order, but a point along a line gives way sooner, so aiming at a wall stays on the wall.
+  const B = cal ? { x: 0, tick: 0, end: 2, weak: 6, mk: 6, line: 18 } : { x: 0, tick: 1, end: 2, weak: 5, mk: 2, line: 6 };
+  const consider = (q, kind, pri, bias) => {
     if (!q || !isFinite(q[0]) || !isFinite(q[1])) return;
     const d = dist(p, q);
     if (d > r) return;
-    const score = d + biasOf(kind, pri);
+    const score = d * z + bias;
     if (!best || score < best.score - 1e-9 || (Math.abs(score - best.score) < 1e-9 && d < best.d))
       best = { p: q, kind, pri, d, score };
   };
-  opts = opts || {};
-  const noSleeve = !!(opts.noSleeve || opts.mode === 'calibrate');
-  // 1) Sleeve / anchor centres — high priority for Length/place, NEVER in Calibrate.
-  // Tight sleeveR: lock when the aim is on the mark. If a gray plan stroke is clearly
-  // closer than the sleeve, fall through so linework wins (nearby marks must not steal).
+  const all = (G && G.ready && G.segs && G.segs.length) ? snapSegs(G, p, r, 160) : [];
+  // Small filled shapes (arrowheads, dots, the marks themselves) only count when setting the scale.
+  const near = cal ? all : all.filter(o => !o.s[6]);
+  // Measuring and placing: a point only gets its head start over "a point along the line" when it lies on the line
+  // nearest the aim (a corner, a crossing, a tick on it). A leader end or arrow tip beside a wall is not on the wall,
+  // so with the aim on the wall the wall keeps the lock.
+  const L0 = near[0];
+  const head = (q, bias) => (cal || !L0) ? bias : (dist(q, projSeg(q, L0.s)) <= Math.min(0.75 / z, 0.5) ? bias : Math.max(bias, B.line));
+  const crossed = new Set();
+  // 1) Sleeve / anchor centres come first when measuring or placing (never in Set scale). The mark's own outline, its
+  //    label and nearby arrow tips cannot take the lock. Only a long plan line directly under the aim (about 2 px) does,
+  //    and only when the mark is clearly off to the side.
   if (!noSleeve && G && G.sleeve) {
     const sr = opts.sleeveR != null ? opts.sleeveR : r;
-    const near = nearSleevePts(G, p, sr);
-    if (near.length) {
-      let bq = near[0], bd = dist(p, near[0]);
-      for (let i = 1; i < near.length; i++) { const d = dist(p, near[i]); if (d < bd) { bd = d; bq = near[i]; } }
+    const pts = nearSleevePts(G, p, sr);
+    if (pts.length) {
+      let bq = pts[0], bd = dist(p, pts[0]);
+      for (let i = 1; i < pts.length; i++) { const d = dist(p, pts[i]); if (d < bd) { bd = d; bq = pts[i]; } }
       const mergeTol = 2.5; let sx = 0, sy = 0, n = 0;
-      for (const q of near) if (Math.hypot(q[0] - bq[0], q[1] - bq[1]) <= mergeTol) { sx += q[0]; sy += q[1]; n++; }
+      for (const q of pts) if (Math.hypot(q[0] - bq[0], q[1] - bq[1]) <= mergeTol) { sx += q[0]; sy += q[1]; n++; }
       const centre = n >= 2 ? [sx / n, sy / n] : bq;
       const sleeveD = dist(p, centre);
-      let lineD = Infinity;
-      if (G.ready && G.segs && G.segs.length) {
-        const ids = nearSegs(G, p, Math.min(r, sleeveD + 1)).slice(0, 120);
-        for (const i of ids) {
-          const s = G.segs[i]; if (!s || s[4]) continue;
-          const d = dist(projSeg(p, s), p); if (d < lineD) lineD = d;
-        }
-      }
-      if (!(lineD + 0.85 < sleeveD)) {
-        return { p: centre, kind: 'sleeve', pri: -1, d: sleeveD };
-      }
-      // Aim is clearly on a nearer plan stroke — do not let the sleeve steal.
+      // "Under the aim" = within 2 px of a long line that does not itself run through the mark (a mark sitting on a
+      // grid line keeps the lock when the finger slides along that line).
+      const offMark = o => { const f = projSeg(centre, o.s); return Math.hypot(f[0] - centre[0], f[1] - centre[1]) * z > 1.5; };
+      const onLongLine = near.some(o => o.len >= 3 * tickMax && o.d * z <= 2 && offMark(o));
+      if (!(onLongLine && sleeveD * z >= 5)) return { p: centre, kind: 'sleeve', pri: -1, d: sleeveD, score: sleeveD * z - 100 };
     }
   }
-  // 2) Perpendicular foot when measuring from a sleeve centre — always lock
+  // 2) Perpendicular foot when measuring from a sleeve centre
   if (opts.perpFrom) {
     const hit = nearestPerpWall(opts.perpFrom, p, Math.max(r * 20, Math.max(doc.sizes[page].w, doc.sizes[page].h)));
     if (hit) {
-      consider(hit.foot, hit.onSeg ? 'perp' : 'perp-ext', -3);
+      consider(hit.foot, hit.onSeg ? 'perp' : 'perp-ext', -3, -3);
       if (best && (best.kind === 'perp' || best.kind === 'perp-ext')) wallExt = hit.ext ? { a: hit.ext[0], b: hit.ext[1] } : null;
     }
   }
-  // 3) Markup points (lower than vector geometry in calibrate; same band as ends otherwise)
-  const markupPri = opts.mode === 'calibrate' ? 2 : 1;
-  for (const it of proj.items) if (it.page === page) for (const q of it.pts) if (q !== exclude) consider(q, 'end', markupPri);
-  if (draft) for (const q of draft.pts) if (q !== exclude) consider(q, 'end', markupPri);
-  // 4) Plan geometry priority (Calibrate + Length when no sleeve):
-  //    intersections / tick T-junctions > short tick ends > line ends > on-line projection
-  if (G && G.ready && G.segs && G.segs.length) {
-    const ids = nearSegs(G, p, r).slice(0, 500), S = ids.map(i => G.segs[i]).filter(s => s && !s[4]);
-    const tickMax = Math.max(8, 0.012 * Math.min(doc.sizes[page].w, doc.sizes[page].h));
-    const nearLines = [];
-    for (const s of S) {
-      const foot = projSeg(p, s);
-      if (dist(foot, p) <= r) nearLines.push(s);
-    }
-    const near = nearLines.slice(0, 100);
-    // 4a) Intersections: prefer tick crossings and near-orthogonal pairs (dimension geometry)
-    for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) {
-      const a = near[i], b = near[j];
+  // 3) Points of existing markups
+  const markupPri = cal ? 2 : 1;
+  for (const it of proj.items) if (it.page === page) for (const q of it.pts) if (q !== exclude) consider(q, 'end', markupPri, B.mk);
+  if (draft) for (const q of draft.pts) if (q !== exclude) consider(q, 'end', markupPri, B.mk);
+  // 4) Plan geometry
+  if (near.length) {
+    const top = near.length > 60 ? near.slice(0, 60) : near;
+    // 4a) Crossings: tick crossings and near-square pairs are dimension geometry; an oblique crossing is weak
+    for (let i = 0; i < top.length; i++) for (let j = i + 1; j < top.length; j++) {
+      const a = top[i].s, b = top[j].s;
       const x = segX(a, b); if (!x) continue;
-      const la = Math.hypot(a[2] - a[0], a[3] - a[1]), lb = Math.hypot(b[2] - b[0], b[3] - b[1]);
-      const short = Math.min(la, lb) <= tickMax;
-      const adx = a[2] - a[0], ady = a[3] - a[1], bdx = b[2] - b[0], bdy = b[3] - b[1];
-      const denom = (la * lb) || 1;
-      const ortho = Math.abs(adx * bdx + ady * bdy) / denom < 0.35;
-      if (short || ortho) consider(x, 'x', -2);
-      else consider(x, 'x', 0); // weak — won't beat a nearby tick end
+      const la = top[i].len, lb = top[j].len;
+      const ortho = Math.abs((a[2] - a[0]) * (b[2] - b[0]) + (a[3] - a[1]) * (b[3] - b[1])) / ((la * lb) || 1) < 0.35;
+      if (Math.min(la, lb) <= tickMax || ortho) { consider(x, 'x', -2, head(x, B.x)); if (la <= tickMax) crossed.add(top[i]); if (lb <= tickMax) crossed.add(top[j]); }
+      else consider(x, 'x', 0, head(x, B.weak));
     }
-    // 4b) T-junctions: short tick end lying on (or very near) a longer line → treat as intersection
-    const tTol = Math.max(0.35, r * 0.08);
-    for (const s of near) {
-      const len = Math.hypot(s[2] - s[0], s[3] - s[1]);
-      if (len > tickMax || len < 0.2) continue;
-      for (const end of [[s[0], s[1]], [s[2], s[3]]]) {
-        for (const L of near) {
-          if (L === s) continue;
-          const Llen = Math.hypot(L[2] - L[0], L[3] - L[1]);
-          if (Llen < len * 1.2) continue;
-          const foot = projSeg(end, L);
-          if (dist(end, foot) <= tTol) consider(foot, 'x', -2);
-        }
+    // 4b) T-junctions: a short tick ending on (or a hair from) a longer line counts as a crossing
+    const tTol = Math.min(1, Math.max(0.35, r * 0.08));
+    for (const o of top) {
+      if (o.len > tickMax || o.len < 0.2) continue; const s = o.s;
+      for (const end of [[s[0], s[1]], [s[2], s[3]]]) for (const q of top) {
+        if (q === o || q.len < o.len * 1.2) continue;
+        const foot = projSeg(end, q.s);
+        if (dist(end, foot) <= tTol) { consider(foot, 'x', -2, head(foot, B.x)); crossed.add(o); }
       }
     }
-    // 4c) Endpoints — short tick ends beat long-line ends
-    for (const s of S) {
-      const len = Math.hypot(s[2] - s[0], s[3] - s[1]);
-      const pri = len <= tickMax ? -1 : 0;
-      consider([s[0], s[1]], 'end', pri);
-      consider([s[2], s[3]], 'end', pri);
+    // 4c) Ends: a short tick end ranks with crossings, a long line's end just behind
+    //     The free ends of a tick that crosses a line step back: the dimension point is the crossing, not the slash tips.
+    for (const o of near) { const tick = o.len <= tickMax, s = o.s, b = crossed.has(o) ? B.line : tick ? B.tick : B.end;
+      for (const q of [[s[0], s[1]], [s[2], s[3]]]) consider(q, 'end', tick ? -1 : 0, head(q, b)); }
+    // 4d) Any point along a line, so a near miss still lands on the stroke
+    for (const o of top) consider(o.f, 'line', 1, B.line);
+  }
+  if (G && G.ready && G.pgrid) {
+    const c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
+    for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) for (const i of (G.pgrid.get(cx + ',' + cy) || [])) {
+      const q = G.pts.get ? G.pts.get(i) : G.pts[i]; consider([q[0], q[1]], q[2], 0, head(q, B.end));
     }
-    if (G.pgrid) {
-      const c1x = Math.floor((p[0] - r) / CELL), c2x = Math.floor((p[0] + r) / CELL), c1y = Math.floor((p[1] - r) / CELL), c2y = Math.floor((p[1] + r) / CELL);
-      for (let cx = c1x; cx <= c2x; cx++) for (let cy = c1y; cy <= c2y; cy++) for (const i of (G.pgrid.get(cx + ',' + cy) || [])) {
-        const q = G.pts.get ? G.pts.get(i) : G.pts[i]; consider([q[0], q[1]], q[2], 0);
-      }
-    }
-    // 4d) On-line perpendicular projection — always available so a near miss locks onto the stroke
-    for (const s of near) consider(projSeg(p, s), 'line', 1);
   }
   if (!best && G && G.pix) {
     const { width: W, height: Hh, data } = G.pix, R = Math.ceil(r), x0 = Math.round(p[0]), y0 = Math.round(p[1]); let bd = 1e9, bq = null;
@@ -2020,18 +2050,15 @@ function findSnap(p, r, exclude, opts) {
       const run = (dx, dy) => { let a = 0, b = 0; while (a < 12 && dark(bq[0] - dx * (a + 1), bq[1] - dy * (a + 1))) a++; while (b < 12 && dark(bq[0] + dx * (b + 1), bq[1] + dy * (b + 1))) b++; return [a, b]; };
       const [ha, hb] = run(1, 0), [va, vb] = run(0, 1); let q;
       if (ha + hb <= va + vb) q = [bq[0] + (hb - ha) / 2 + 0.5, p[1]]; else q = [p[0], bq[1] + (vb - va) / 2 + 0.5];
-      consider(q, 'line', 1);
+      consider(q, 'line', 1, B.line);
     }
   }
   return best;
 }
 function sleeveSnapRadius(touchR) {
-  // Tight capture: sleeves still win when the finger is on them, but a nearby mark
-  // must not steal an aim that is clearly on a gray plan line (compete with geom radius).
-  const rCss = touchR ? 18 : 10;
-  const r = rCss / zoom;
-  const cap = touchR ? 8 : 5; // page units — matches geomSnapRadius caps
-  return Math.min(r, cap);
+  // A gloved fingertip on screen (22 CSS px touch, 12 mouse). The nearest mark wins, so close neighbours do not need a
+  // smaller radius, and findSnap lets a long plan line under the aim through.
+  return Math.min((touchR ? 22 : 12) / zoom, SNAP_CAP);
 }
 function aim(p, e, prev, exclude) {
   let q = p; const ortho = prev && (e.shiftKey || shiftDown);
@@ -2061,7 +2088,11 @@ function aim(p, e, prev, exclude) {
         noSleeve: cal,
         mode: cal ? 'calibrate' : (tool === 'line' ? 'measure' : 'place'),
       });
-      if (h) { snapHit = { p: h.p.slice(), kind: h.kind === 'sleeve' ? 'center' : h.kind }; q = h.p.slice();
+      // With Auto straight holding a level / plumb / 45 degree lock, a plan point only breaks the lock when the aim is
+      // really on it (or it lies on the straight ray). The wider catch radius must not pull a straight run off line.
+      const stray = h && st && h.kind !== 'sleeve' && !ortho && h.d * zoom > (touchR ? 10 : 6) && !keepStraight(h, st, prev, r);
+      if (stray) guide = st;
+      else if (h) { snapHit = { p: h.p.slice(), kind: h.kind === 'sleeve' ? 'center' : h.kind }; q = h.p.slice();
         wallExt = null;
         if (ortho) { const hz = Math.abs(p[0] - prev[0]) >= Math.abs(p[1] - prev[1]); q = hz ? [h.p[0], prev[1]] : [prev[0], h.p[1]]; snapHit.p = q; }
         else if (st) {
@@ -2193,7 +2224,8 @@ $('#layersAll').onclick = () => { proj.hidden = {}; renderLayers(); layersChange
 const _openProject = openProject; openProject = async function (id) { await _openProject(id); proj.origins = proj.origins || {}; proj.hidden = proj.hidden || {}; resetHist(); renderLayers(); };
 // ---- sleeves ----
 const sleeveCache = new Map();
-function sleeveName(it) { const n = proj.items.filter(o => o.type === 'sleeve').indexOf(it) + 1; return 'S' + n; }
+function sleeveName(it) { const k = sleeveNo && sleeveNo.get(it); if (k) return 'S' + k; // numbered once per redraw, not once per sleeve
+  const n = proj.items.filter(o => o.type === 'sleeve').indexOf(it) + 1; return 'S' + n; }
 function sleeveInfo(it) {
   const p = it.pts[0], G = geomCache[it.page], key = it.page + ':' + p[0] + ',' + p[1] + ':' + (G && G.ready ? G.segs.length : -1);
   let r = sleeveCache.get(it.id); if (!r || r.key !== key) {
@@ -2233,9 +2265,9 @@ $('#eSize').addEventListener('change', e => { const it = selItem(); if (it) { it
 function buildSleeveCSV() {
   const u = proj.units, f = v => v == null ? '' : Units.fmtLen(v, u), dec = v => v == null ? '' : u === 'mm' ? (v * 1000).toFixed(1) : (Units.isMet(u) ? v : v / Units.FT).toFixed(4), lu = u === 'mm' ? 'mm' : Units.isMet(u) ? 'm' : 'ft';
   const rows = [['Sleeve schedule', proj.name], ['Origin', Object.keys(proj.origins || {}).length ? 'set (Y up)' : 'not set'], [],
-    ['ID', 'Size', 'Label', 'X from origin', 'Y from origin', `X (${lu})`, `Y (${lu})`, 'Offset to nearest vertical line', 'Offset to nearest horizontal line', `Offset X (${lu})`, `Offset Y (${lu})`, 'Ref X layer', 'Ref Y layer', 'Level / page', 'Note', 'Top of slab', 'Slab thickness', 'Top of sleeve', 'Bottom of sleeve', 'Sleeve length', 'Height from']];
+    ['ID', 'Size', 'Label', 'X from origin', 'Y from origin', `X (${lu})`, `Y (${lu})`, 'Offset to nearest vertical line', 'Offset to nearest horizontal line', `Offset X (${lu})`, `Offset Y (${lu})`, 'Ref X layer', 'Ref Y layer', 'Level / page', 'Note', 'Top of slab', 'Slab thickness', 'Top of sleeve', 'Bottom of sleeve', 'Sleeve length (as printed)', 'Structure depth at sleeve', 'Length check', 'Height from']];
   proj.items.filter(i => i.type === 'sleeve').forEach(it => { const i = sleeveInfo(it);
-    rows.push([sleeveName(it), it.size || '', it.label || '', f(i.X), f(i.Y), dec(i.X), dec(i.Y), f(i.dx), f(i.dy), dec(i.dx), dec(i.dy), i.rxLayer, i.ryLayer, doc.type === 'cad' ? proj.name : 'Page ' + it.page, it.text || '', ...(h => [fmtEl(h.tos), h.thk != null ? fmtThk(h.thk) : '', fmtEl(h.top), fmtEl(h.bot), h.len != null ? fmtThk(h.len) : '', h.src])(sleeveHeight(it))]); });
+    rows.push([sleeveName(it), it.size || '', it.label || '', f(i.X), f(i.Y), dec(i.X), dec(i.Y), f(i.dx), f(i.dy), dec(i.dx), dec(i.dy), i.rxLayer, i.ryLayer, doc.type === 'cad' ? proj.name : 'Page ' + it.page, it.text || '', ...(h => [fmtEl(h.tos), h.thk != null ? fmtThk(h.thk) : '', fmtEl(h.top), fmtEl(h.bot), h.labelLen != null ? Math.round(h.labelLen * 1000) + ' mm' : '', h.len != null ? fmtThk(h.len) : '', h.lenFlag, h.src])(sleeveHeight(it))]); });
   return rows.map(r => r.map(csvCell).join(',')).join('\r\n');
 }
 $('#sleeveCsvBtn').onclick = () => { if (!proj) return; if (!proj.items.some(i => i.type === 'sleeve')) return toast('No sleeves yet. Use the Sleeve tool.'); download('\ufeff' + buildSleeveCSV(), proj.name + '-sleeves.csv', 'text/csv'); };
@@ -2256,6 +2288,7 @@ function parseSize(s) { // returns size label or null
   return null; }
 function sizeFromDia(rPage) { const s = scaleOf(page); if (!s || !rPage) return { size: '', raw: '' }; const dm = 2 * rPage * s, din = dm / Units.IN;
   const raw = Units.isMet(proj.units) ? 'Ø ' + (dm * 1000).toFixed(0) + ' mm' : 'Ø ' + din.toFixed(2) + '"'; let best = NOMINAL_IN[0]; for (const n of NOMINAL_IN) if (Math.abs(n - din) < Math.abs(best - din)) best = n; return { size: inStr(best), raw }; }
+function nearLenText(x, y, R) { let best = '', bd = R; for (const t of doc.cad.texts) { if ((proj.hidden || {})[doc.cad.layerNames[t.L]] || !t.text) continue; const d = Math.hypot(t.x - x, t.y - y); if (d <= bd && labelLength(t.text) != null) { bd = d; best = String(t.text).replace(/\\[A-Za-z][^;]*;/g, '').trim(); } } return best; }
 function nearText(x, y, R) { let best = null, bd = R; for (const t of doc.cad.texts) { if ((proj.hidden || {})[doc.cad.layerNames[t.L]]) continue; const d = Math.hypot(t.x - x, t.y - y); if (d <= bd) { const sz = parseSize(t.text); if (sz) { bd = d; best = sz; } } } return best; }
 // size written in a block name, e.g. "SLV_Round_FLR_4", "Sleeve 3in", "PEN-100mm" (only for unscaled inserts)
 function sizeFromName(n) { n = String(n || ''); const p = parseSize(n); if (p) return p; const t = n.split(/[^0-9.\/-]+/).filter(Boolean).pop(); if (!t || !/^\d+(?:\.\d+)?$/.test(t)) return null; const v = +t; return NOMINAL_IN.includes(v) && /[_\s-]\d+(?:\.\d+)?[_\s-]*$/.test(n) ? inStr(v) : null; }
@@ -2266,7 +2299,9 @@ function candSize(c) { // attributes > size in block name > nearby text > diamet
   if (!size && c.kind === 'insert' && Math.abs((c.sc ?? 1) - 1) < 0.01) { const s = sizeFromName(c.name); if (s) { size = s; src = 'block name'; } }
   if (!size) { const R = Math.max(4 * (c.r || 0), 0.015 * Math.min(doc.cad.w, doc.cad.h)); const t = nearText(c.x, c.y, R); if (t) { size = t; src = 'nearby text'; } }
   if (!size && dia.size) { size = dia.size; src = 'diameter'; }
-  return { size: size || '?', src: src || 'unknown', raw: dia.raw }; }
+  let lbl = ''; if (c.attrs) for (const a of c.attrs) if (labelLength(a.value) != null) { lbl = String(a.value); break; }
+  if (!lbl) lbl = nearLenText(c.x, c.y, Math.max(4 * (c.r || 0), 0.015 * Math.min(doc.cad.w, doc.cad.h)));
+  return { size: size || '?', src: src || 'unknown', raw: dia.raw, lbl }; }
 // Revit and some exporters append the same view name to every block name (e.g. "... - SLAB SLEEVING LAYOUT"); strip it before keyword matching
 function commonSuffix(M) { if (M._sfx != null) return M._sfx; const names = [...new Set(M.inserts.map(s => s.name))]; let best = '';
   if (names.length >= 5) for (const seed of names.slice(0, 20)) for (let L = Math.max(6, best.length + 1); L <= seed.length - 1; L++) { const sx = seed.slice(-L); let n = 0; for (const x of names) if (x.endsWith(sx)) n++; if (n >= 0.6 * names.length) best = sx; else break; }
@@ -2314,7 +2349,7 @@ $('#findNone').onclick = () => { FS.cands.forEach(c => c.on = false); renderFind
 $('#findCancel').onclick = endFind;
 $('#findPick').onclick = () => { document.body.classList.add('pickmode'); setTool('select'); toast('Click one sleeve symbol (block or circle) on the plan.', 5000); };
 $('#findAdd').onclick = () => { const add = FS.cands.filter(c => c.on && !c.dup); if (!add.length) return;
-  for (const c of add) proj.items.push({ id: uid(), type: 'sleeve', page, pts: [[c.x, c.y]], color: $('#color').value, label: '', size: c.size === '?' ? '' : c.size, layer: c.layer, text: [c.name ? 'Block ' + c.name : 'Circle', 'layer ' + c.layer, c.raw].filter(Boolean).join(', '), src: 'auto' });
+  for (const c of add) proj.items.push({ id: uid(), type: 'sleeve', page, pts: [[c.x, c.y]], color: $('#color').value, label: c.lbl || '', size: c.size === '?' ? '' : c.size, layer: c.layer, text: [c.name ? 'Block ' + c.name : 'Circle', 'layer ' + c.layer, c.raw].filter(Boolean).join(', '), src: 'auto' });
   changed(); toast(`Added ${add.length} sleeve${add.length > 1 ? 's' : ''}. Undo removes them in one step.`, 5000); endFind(); };
 $('#findBtn').onclick = () => startFind('auto');
 // pick-one: next click on the plan selects nearest insert or circle
@@ -2369,12 +2404,19 @@ function textElevation(it) { if (!doc || doc.type !== 'cad') return null; const 
   const R = 0.03 * Math.min(doc.cad.w, doc.cad.h), hid = proj.hidden || {}; let best = null, bd = R;
   for (const t of doc.cad.texts) { if (hid[doc.cad.layerNames[t.L]] || !t.text) continue; const d = Math.hypot(t.x - x, t.y - y); if (d > bd) continue; const m = EL_RE.exec(t.text); if (!m) continue; const v = parseEl(m[1]); if (v != null && isFinite(v)) { bd = d; best = v; } }
   htText.set(key, best); return best; }
+// Length printed in a sleeve label: "4\" VENT 900L" -> 900 mm. Also "900 LG", "900 LONG", "L=900". Millimetres only.
+// This is the sleeve's length. It is never replaced by slab thickness; the structure is only used to check it.
+const LEN_RES = [/(?:^|[^\d.,\/])(\d{2,5})\s*(?:mm\s*)?L(?:G|ONG)?\b/i, /\bL\s*[=:]\s*(\d{2,5})\b/i];
+function labelLength(text) { text = String(text == null ? '' : text); for (const re of LEN_RES) { const m = re.exec(text); if (m) return +m[1] / 1000; } return null; }
 function sleeveHeight(it) {
   const d = slabDefault(it.page), z = zoneAt(it.page, it.pts[0][0], it.pts[0][1]); let tos = null, src = '';
   if (it.tos != null) { tos = it.tos; src = 'override'; } else { const t = textElevation(it); if (t != null) { tos = t; src = 'text on plan'; } else if (z && z.slab.tos != null) { tos = z.slab.tos; src = 'zone ' + (z.label || 'slab'); } else if (d.tos != null) { tos = d.tos; src = 'level default'; } }
   const thk = it.thk != null ? it.thk : z && z.slab.thk != null ? z.slab.thk : d.thk != null ? d.thk : null, ext = it.ext != null ? it.ext : d.ext || 0;
   const top = tos != null ? tos + ext : null, bot = tos != null && thk != null ? tos - thk : null, len = thk != null ? thk + ext : null;
-  return { tos, thk, ext, top, bot, len, src, zone: z }; }
+  // labelLen: as printed (blank when the label has none). len / structLen: what the slab values at this spot add up to.
+  const a = labelLength(it.label), labelLen = a != null ? a : labelLength(it.text), mm = v => Math.round(v * 1000) + ' mm';
+  const lenFlag = labelLen == null ? 'no length on label' : len != null && Math.abs(labelLen - len) > 0.0005 ? `label ${mm(labelLen)}, structure ${mm(len)}` : '';
+  return { tos, thk, ext, top, bot, len, structLen: len, labelLen, lenFlag, src, zone: z }; }
 function sleeveHtLabel(it) { if (!proj) return ''; const h = sleeveHeight(it); return h.tos == null ? '' : ' T ' + fmtEl(h.top) + (h.bot != null ? ' B ' + fmtEl(h.bot) : ''); }
 // edit panel rows (area: slab zone; sleeve: height + overrides)
 (function () {
@@ -2387,7 +2429,7 @@ function sleeveHtLabel(it) { if (!proj) return ''; const h = sleeveHeight(it); r
 })();
 function fillHt() { const it = proj && proj.items.find(i => i.id === selId); const za = !!(it && it.type === 'area'), sl = !!(it && it.type === 'sleeve'); $('#eZoneRow').hidden = !za; $('#eHtRow').hidden = !sl; const keep = (id, v) => { if (document.activeElement !== $(id)) $(id).value = v; };
   if (za) { $('#eZone').checked = !!it.slab; keep('#eZTos', it.slab && it.slab.tos != null ? fmtEl(it.slab.tos) : ''); keep('#eZThk', it.slab && it.slab.thk != null ? fmtThk(it.slab.thk) : ''); $('#eZTos').disabled = $('#eZThk').disabled = !it.slab; }
-  if (sl) { const h = sleeveHeight(it); $('#eHtInfo').textContent = h.tos == null ? 'No slab height yet: set a level default in Sleeve count, draw a slab zone, or type an override.' : `Top of slab ${fmtEl(h.tos)} (${h.src}). Sleeve top ${fmtEl(h.top)}, bottom ${h.bot != null ? fmtEl(h.bot) : '? (no thickness)'}${h.len != null ? ', length ' + fmtThk(h.len) : ''}.`;
+  if (sl) { const h = sleeveHeight(it); $('#eHtInfo').textContent = h.tos == null ? 'No slab height yet: set a level default in Sleeve count, draw a slab zone, or type an override.' : `Top of slab ${fmtEl(h.tos)} (${h.src}). Sleeve top ${fmtEl(h.top)}, bottom ${h.bot != null ? fmtEl(h.bot) : '? (no thickness)'}${h.len != null ? ', structure depth ' + fmtThk(h.len) : ''}.` + (h.labelLen != null ? ` Length on label ${Math.round(h.labelLen * 1000)} mm.` : '') + (h.lenFlag ? ` Check: ${h.lenFlag}.` : '');
     keep('#eTos', it.tos != null ? fmtEl(it.tos) : ''); keep('#eThk', it.thk != null ? fmtThk(it.thk) : ''); keep('#eExt', it.ext != null ? fmtThk(it.ext) : ''); } }
 const _renderListH = renderList; renderList = function () { _renderListH(); fillHt(); };
 const setNum = (inp, fn, apply) => inp.addEventListener('change', e => { const v = fn(e.target.value); if (Number.isNaN(v)) { toast('Could not read that value. Examples: 64.800, 64,800, 212\'-7", 250mm, 10"'); return; } apply(v); htText.clear(); changed(); });
@@ -2407,13 +2449,13 @@ const _changedZ = changed; changed = function () { if (zoneNext && proj) { const
 // Sleeve count panel: level defaults + heights
 const _renderSC = renderSleeveCount; renderSleeveCount = function () { _renderSC(); if (!proj) return; const d = slabDefault(page), S = proj.items.filter(i => i.type === 'sleeve');
   const box = document.createElement('div'); box.id = 'slabBox';
-  const byTos = new Map(); let noH = 0; for (const s of S) { const h = sleeveHeight(s); if (h.tos == null) { noH++; continue; } const k = fmtEl(h.tos) + '|' + (h.bot != null ? fmtEl(h.bot) : '?'); byTos.set(k, (byTos.get(k) || 0) + 1); }
+  const byTos = new Map(); let noH = 0, noLen = 0, lenDiff = 0; for (const s of S) { const h = sleeveHeight(s); if (h.labelLen == null) noLen++; else if (h.lenFlag) lenDiff++; if (h.tos == null) { noH++; continue; } const k = fmtEl(h.tos) + '|' + (h.bot != null ? fmtEl(h.bot) : '?'); byTos.set(k, (byTos.get(k) || 0) + 1); }
   box.innerHTML = `<h4>Slab (this level / page)</h4><div class="slabin"><label>Top of slab <input id="dTos" type="text" value="${esc(fmtEl(d.tos))}" placeholder="e.g. 64.800"></label><label>Thickness <input id="dThk" type="text" value="${esc(fmtThk(d.thk))}" placeholder="e.g. 250mm"></label><label>Extension above slab <input id="dExt" type="text" value="${esc(d.ext ? fmtThk(d.ext) : '')}" placeholder="0"></label></div>` +
-    (S.length ? `<h4>By height</h4><table id="slvHt"><tr><th>Top of slab</th><th>Bottom of sleeve</th><th class="n">Count</th></tr>` + [...byTos.entries()].sort().map(([k, n]) => { const [a, b] = k.split('|'); return `<tr><td>${esc(a)}</td><td>${esc(b)}</td><td class="n">${n}</td></tr>`; }).join('') + (noH ? `<tr><td colspan="2">No height</td><td class="n">${noH}</td></tr>` : '') + '</table>' : '');
+    (S.length ? `<h4>By height</h4><table id="slvHt"><tr><th>Top of slab</th><th>Bottom of sleeve</th><th class="n">Count</th></tr>` + [...byTos.entries()].sort().map(([k, n]) => { const [a, b] = k.split('|'); return `<tr><td>${esc(a)}</td><td>${esc(b)}</td><td class="n">${n}</td></tr>`; }).join('') + (noH ? `<tr><td colspan="2">No height</td><td class="n">${noH}</td></tr>` : '') + '</table>' + `<h4>Length check</h4><table id="slvLen"><tr><td>No length on label</td><td class="n">${noLen}</td></tr><tr><td>Label differs from structure</td><td class="n">${lenDiff}</td></tr></table>` : '');
   $('#slvBody').appendChild(box);
   const upd = (id, fn, key) => setNum($(id), fn, v => { proj.slab = proj.slab || {}; const o = proj.slab[page] = Object.assign({}, proj.slab[page]); if (v == null) delete o[key]; else o[key] = v; setTimeout(renderSleeveCount, 0); });
   upd('#dTos', parseEl, 'tos'); upd('#dThk', parseThk, 'thk'); upd('#dExt', parseThk, 'ext'); };
-Object.assign(window.PM, { sleeveHeight, parseEl, parseThk, setSlabDefault: (pg, o) => { proj.slab = proj.slab || {}; proj.slab[pg] = Object.assign({}, proj.slab[pg], o); htText.clear(); changed(); } });
+Object.assign(window.PM, { sleeveHeight, labelLength, parseEl, parseThk, setSlabDefault: (pg, o) => { proj.slab = proj.slab || {}; proj.slab[pg] = Object.assign({}, proj.slab[pg], o); htText.clear(); changed(); } });
 
 // re-render the visible region after scrolling settles (bitmap stays in place meanwhile)
 vpEl.addEventListener('scroll', () => { if (!doc) return; gestureUntil = Math.max(gestureUntil, performance.now() + 120); scheduleRender(150); }, { passive: true }); // cheap when the view is still covered

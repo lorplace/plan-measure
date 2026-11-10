@@ -45,7 +45,7 @@ with sync_playwright() as p:
     pg.wait_for_timeout(500)
 
     # Calibrate tool
-    pg.tap('[data-tool=calibrate]')
+    pg.tap('button[data-tool=calibrate]')
     pg.wait_for_timeout(200)
 
     def tap_page(x, y):
@@ -90,7 +90,7 @@ with sync_playwright() as p:
     chk('scale name shows mm', scale_name and 'mm' in str(scale_name))
 
     # Measure the 4 m (4000 mm) top of the rectangle
-    pg.tap('[data-tool=line]')
+    pg.evaluate("PM.setTool('line')")  # Set scale already switches to Length; the bare [data-tool=line] selector matched <body> and tapped the plan
     tap_page(144, 400)
     tap_page(144 + 40 * MM, 400)
     pg.wait_for_timeout(300)

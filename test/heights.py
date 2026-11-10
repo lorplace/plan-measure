@@ -52,9 +52,10 @@ with sync_playwright() as p:
     pg.screenshot(path='test/out-heights.png')
     # CSV
     c = list(csv.reader(io.StringIO(pg.evaluate('PM.buildSleeveCSV()'))))
-    hi = next(i for i, r in enumerate(c) if 'Height from' in r); hd = c[hi]; c = c[hi:]; print(hd[-6:])
-    chk('CSV height columns', hd[-6:] == ['Top of slab', 'Slab thickness', 'Top of sleeve', 'Bottom of sleeve', 'Sleeve length', 'Height from'])
-    chk('CSV values', any(row[-4] == '64.825 m' and row[-3] == '64.525 m' and row[-2] == '300 mm' and row[-1] == 'override' for row in c[1:]) and any(row[-1] == 'text on plan' and row[-6] == '64.650 m' for row in c[1:]))
+    hi = next(i for i, r in enumerate(c) if 'Height from' in r); hd = c[hi]; c = c[hi:]; print(hd[-8:])
+    # Sleeve length is now the length printed in the label; what the slab adds up to is its own column, with a check column.
+    chk('CSV height columns', hd[-8:] == ['Top of slab', 'Slab thickness', 'Top of sleeve', 'Bottom of sleeve', 'Sleeve length (as printed)', 'Structure depth at sleeve', 'Length check', 'Height from'])
+    chk('CSV values', any(row[-6] == '64.825 m' and row[-5] == '64.525 m' and row[-4] == '' and row[-3] == '300 mm' and row[-2] == 'no length on label' and row[-1] == 'override' for row in c[1:]) and any(row[-1] == 'text on plan' and row[-8] == '64.650 m' for row in c[1:]))
     # PDF
     n = pg.evaluate('(async()=>{const b=await PM.buildPDF();return b.length||b.byteLength||b.size})()')
     chk('PDF export works', n and n > 1000)
